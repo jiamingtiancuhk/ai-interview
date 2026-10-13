@@ -1,15 +1,18 @@
 # Python
 __pycache__/
 *.pyc
-*.pyo
+.venv/
+.pytest_cache/
 
-# Data & models
+# Data
+backend/data/
 *.db
-*.sqlite
 
-# Docker volumes
-.docker/
+# Frontend
+node_modules/
+frontend/dist/
 
-# OS
+# OS / editors
 .DS_Store
 *.swp
+.claude/

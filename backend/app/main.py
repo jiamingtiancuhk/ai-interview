@@ -166,7 +166,7 @@ async def interview_ws(ws: WebSocket, session_id: str):
             if frame["type"] == "websocket.disconnect":
                 raise WebSocketDisconnect(frame.get("code", 1000))
             if frame.get("bytes") is not None:
-                text, latency = await asr.transcribe_pcm(frame["bytes"], s.cfg.language)
+                text, latency = await asr.transcribe_pcm(frame["bytes"], s.cfg.language, s.asr_terms())
                 await ws.send_json({"type": "transcript_segment", "text": text, "latency_s": round(latency, 2)})
                 continue
             msg = json.loads(frame["text"])
@@ -213,4 +213,9 @@ if config.STATIC_DIR.exists():
 
     @app.get("/{path:path}")
     async def spa(path: str):
+        # Real files (VAD model, wasm, favicon) are served as-is; every other
+        # path is a client-side route.
+        file = (config.STATIC_DIR / path).resolve()
+        if path and file.is_file() and file.is_relative_to(config.STATIC_DIR.resolve()):
+            return FileResponse(file)
         return FileResponse(config.STATIC_DIR / "index.html")

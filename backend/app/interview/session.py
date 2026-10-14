@@ -358,6 +358,13 @@ class InterviewSession:
             s.report = Report.model_validate_json(row["report"])
         return s
 
+    def asr_terms(self) -> list[str]:
+        """Vocabulary hint for speech recognition: current question first."""
+        from ..asr import vocabulary
+
+        skills = " ".join(self.profile.key_skills) if self.profile else ""
+        return vocabulary(self._last_question(), skills, self.cfg.resume_text, self.cfg.job_description)
+
     @property
     def assessment_pending(self) -> bool:
         return any(t.scorable and t.assessment is None for t in self.turns)

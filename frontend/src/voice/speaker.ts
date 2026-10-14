@@ -4,11 +4,22 @@ const LOCALE: Record<Language, string> = { zh: 'zh-CN', en: 'en-US' }
 // Split after sentence-ending punctuation so speech starts before the LLM finishes.
 const SENTENCE_END = /[。！？!?；;\n]|[.](?=\s)/
 
+// macOS also ships novelty voices ("Bubbles", "Bad News"...) and robotic
+// Eloquence voices ("Eddy", "Flo"...) under the same locales; never use those.
+const UNSUITABLE =
+  /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Good News|Jester|Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox|Fred|Junior|Kathy|Ralph|Eddy|Flo|Grandma|Grandpa|Reed|Rocko|Sandy|Shelley)\b/i
+const PREFERRED = /^(Samantha|Ava|Allison|Susan|Tom|Alex|Evan|Nathan|Zoe|Tingting|婷婷|Lili|莉莉|Yu-shu|语舒)\b/i
+
 function pickVoice(lang: Language): SpeechSynthesisVoice | undefined {
-  const voices = speechSynthesis.getVoices().filter((v) => v.lang.replace('_', '-').startsWith(LOCALE[lang]))
-  // macOS ships "Enhanced"/"Premium" variants that sound far better when installed.
+  const voices = speechSynthesis
+    .getVoices()
+    .filter((v) => v.lang.replace('_', '-').startsWith(LOCALE[lang]) && !UNSUITABLE.test(v.name))
+  // "Premium"/"Enhanced" variants sound far better when the user has installed them.
   const rank = (v: SpeechSynthesisVoice) =>
-    (/premium/i.test(v.name) ? 4 : 0) + (/enhanced|增强/i.test(v.name) ? 2 : 0) + (v.localService ? 1 : 0)
+    (/premium|高级/i.test(v.name) ? 8 : 0) +
+    (/enhanced|增强/i.test(v.name) ? 4 : 0) +
+    (PREFERRED.test(v.name) ? 2 : 0) +
+    (v.default ? 1 : 0)
   return voices.sort((a, b) => rank(b) - rank(a))[0]
 }
 

@@ -41,29 +41,36 @@ export interface Scores {
   structure: number
 }
 
+export interface Assessment {
+  scores: Scores
+  strengths: string[]
+  gaps: string[]
+  vague_claims: string[]
+  better_answer_hint: string
+}
+
 export interface Turn {
   stage_index: number
   topic_index: number
   question: string
   answer: string
   action: string
-  eval_latency_s: number
-  evaluation: {
-    answer_type: string
-    scores: Scores
-    strengths: string[]
-    gaps: string[]
-    vague_claims: string[]
-    should_probe: boolean
-    probe_angle: string
-  }
+  route_latency_s: number
+  routing: { answer_type: string; needs_follow_up: boolean; probe_angle: string }
+  assessment: Assessment | null
 }
 
 export interface InterviewDetail extends Snapshot {
   config: Omit<InterviewConfig, 'job_description' | 'resume_text'>
   messages: Message[]
   turns?: Turn[]
+  assessing?: boolean
   plan?: { stages: { kind: StageKind; goal: string; minutes: number; topics: { title: string; rationale: string }[] }[] }
+}
+
+export interface Health {
+  llm: { ok: boolean; model: string; model_ready: boolean; error?: string }
+  asr: { state: 'loading' | 'ready' | 'unavailable'; model: string; error: string }
 }
 
 export interface InterviewSummary {
@@ -91,7 +98,7 @@ async function json<T>(r: Response): Promise<T> {
 }
 
 export const api = {
-  health: () => fetch('/api/health').then(json<{ llm: { ok: boolean; model: string; model_ready: boolean; error?: string } }>),
+  health: () => fetch('/api/health').then(json<Health>),
   parseDocument: (file: File) => {
     const fd = new FormData()
     fd.append('file', file)
@@ -113,6 +120,7 @@ export type ServerEvent =
   | { type: 'thinking' }
   | { type: 'interviewer_delta'; text: string }
   | { type: 'interviewer_done'; text: string }
+  | { type: 'transcript_segment'; text: string; latency_s: number }
   | { type: 'finished' }
   | { type: 'error'; message: string }
 

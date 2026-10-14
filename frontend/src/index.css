@@ -13,3 +13,8 @@
       dark:border-zinc-700 dark:bg-zinc-900 dark:focus:border-zinc-300;
   }
 }
+
+@keyframes shrink {
+  from { width: 100%; }
+  to { width: 0%; }
+}

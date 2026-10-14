@@ -1,10 +1,9 @@
 from app.interview.models import (
     Action,
     AnswerType,
-    Evaluation,
     InterviewPlan,
     InterviewState,
-    Scores,
+    Routing,
     Stage,
     StageKind,
     Topic,
@@ -22,13 +21,8 @@ PLAN = InterviewPlan(
 BUDGET = 30 * 60
 
 
-def ev(kind=AnswerType.answer, probe=False, exhausted=False) -> Evaluation:
-    return Evaluation(
-        answer_type=kind,
-        scores=Scores(relevance=3, depth=3, evidence=3, clarity=3, structure=3),
-        strengths=[], gaps=[], vague_claims=[],
-        should_probe=probe, probe_angle="why?" if probe else "", topic_exhausted=exhausted,
-    )
+def ev(kind=AnswerType.answer, probe=False) -> Routing:
+    return Routing(answer_type=kind, needs_follow_up=probe, probe_angle="why?" if probe else "")
 
 
 def run(state, evaluation, elapsed=60.0, max_fu=2):
@@ -47,8 +41,20 @@ def test_follow_up_cap_moves_on():
     assert (d.state.topic_index, d.state.follow_ups) == (1, 0)
 
 
-def test_exhausted_topic_moves_on_even_if_probe():
-    d = run(InterviewState(stage_index=1), ev(probe=True, exhausted=True))
+def test_complete_answer_moves_on():
+    d = run(InterviewState(stage_index=1), ev(probe=False))
+    assert d.action == Action.next_topic
+
+
+def test_intro_allows_only_one_follow_up():
+    assert run(InterviewState(stage_index=0), ev(probe=True)).action == Action.follow_up
+    d = run(InterviewState(stage_index=0, follow_ups=1), ev(probe=True))
+    assert d.action == Action.next_stage
+
+
+def test_off_topic_is_redirected_then_dropped():
+    assert run(InterviewState(stage_index=1), ev(AnswerType.off_topic)).action == Action.follow_up
+    d = run(InterviewState(stage_index=1, follow_ups=2), ev(AnswerType.off_topic))
     assert d.action == Action.next_topic
 
 

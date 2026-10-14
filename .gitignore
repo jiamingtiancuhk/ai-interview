@@ -16,3 +16,5 @@ frontend/dist/
 .DS_Store
 *.swp
 .claude/
+frontend/public/vad/
+backend/models/

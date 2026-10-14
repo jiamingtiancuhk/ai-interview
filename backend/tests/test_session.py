@@ -3,7 +3,7 @@ from app.interview.models import Action, InterviewConfig, StageKind
 from app.interview.session import InterviewSession
 from app.store import Store
 
-from .fakes import FakeLLM, evaluation
+from .fakes import FakeLLM, routing
 
 
 async def drain(chunks) -> str:
@@ -24,7 +24,7 @@ async def test_fallback_plan_matches_role_skeleton():
 
 
 async def test_follow_up_then_advance_and_transcript_tags():
-    llm = FakeLLM([evaluation(should_probe=True, topic_exhausted=False, probe_angle="numbers?"), evaluation()])
+    llm = FakeLLM([routing(needs_follow_up=True, probe_angle="numbers?"), routing()])
     s = await new_session(llm)
     await drain(s.open(llm))
 
@@ -45,7 +45,7 @@ async def test_follow_up_then_advance_and_transcript_tags():
 
 
 async def test_evaluation_sees_whole_topic_thread():
-    llm = FakeLLM([evaluation(should_probe=True, topic_exhausted=False)])
+    llm = FakeLLM([routing(needs_follow_up=True)])
     s = await new_session(llm)
     await drain(s.open(llm))
     _, c = await s.answer(llm, "first answer")
@@ -66,5 +66,67 @@ async def test_store_roundtrip(tmp_path):
     loaded = store.load(s.id)
     assert loaded.state == s.state
     assert [m.content for m in loaded.messages] == [m.content for m in s.messages]
-    assert loaded.turns[0].evaluation == s.turns[0].evaluation
+    assert loaded.turns[0].routing == s.turns[0].routing
     assert loaded.elapsed_s() >= s.to_record()["elapsed_s"] - 0.01
+
+
+async def test_reply_is_cut_after_first_question_and_label_stripped():
+    llm = FakeLLM(replies=[["面试官：", "你好，我是", "技术负责人。", "先做个自我介绍吧？", "另外你为什么", "离职？"]])
+    s = await new_session(llm)
+    said = await drain(s.open(llm))
+    assert said == "你好，我是技术负责人。先做个自我介绍吧？"
+    assert s.messages[-1].content == said
+    assert llm.stream_closed == 1  # generation aborted, not drained
+
+
+async def test_wrap_up_is_not_cut_and_english_keeps_spaces():
+    llm = FakeLLM(replies=[["Thanks for your time. ", "Any questions? ", "We will be in touch."]])
+    s = await new_session(llm, language="en")
+    said = await drain(s._speak(llm, Action.wrap_up))
+    assert said == "Thanks for your time. Any questions? We will be in touch."
+
+
+async def test_echoed_question_is_dropped():
+    llm = FakeLLM(
+        routings=[routing(answer_type="candidate_question")],
+        replies=[
+            ["你好。", "请介绍一下你自己？"],
+            ["你们团队现在主要用什么技术栈？", "我们主要用 Go 和 Kafka。", "还有其他问题吗？"],
+        ],
+    )
+    s = await new_session(llm)
+    await drain(s.open(llm))
+    _, chunks = await s.answer(llm, "你们团队现在主要用什么技术栈？")
+    assert await drain(chunks) == "我们主要用 Go 和 Kafka。还有其他问题吗？"
+
+
+async def test_all_echo_falls_back_to_saying_something():
+    llm = FakeLLM(routings=[routing(answer_type="clarification_request")],
+                  replies=[["请介绍一下你自己？"], ["请介绍一下你自己？"]])
+    s = await new_session(llm)
+    await drain(s.open(llm))
+    _, chunks = await s.answer(llm, "什么意思？")
+    assert await drain(chunks) == "请介绍一下你自己？"
+
+
+async def test_background_assessment_fills_turns_once():
+    llm = FakeLLM([routing(), routing(answer_type="candidate_question")])
+    s = await new_session(llm)
+    await drain(s.open(llm))
+    for text in ["answer one", "what is the team like?"]:
+        _, c = await s.answer(llm, text)
+        await drain(c)
+    assert await s.assess_pending(llm) == 1  # candidate questions are not scored
+    assert s.turns[0].assessment is not None and s.turns[1].assessment is None
+    assert await s.assess_pending(llm) == 0
+
+
+async def test_mid_interview_candidate_question_returns_to_open_question():
+    llm = FakeLLM(
+        routings=[routing(answer_type="candidate_question")],
+        replies=[["你好。", "你怎么保证消息不丢？"], ["我们用 Go。"]],
+    )
+    s = await new_session(llm)
+    await drain(s.open(llm))
+    _, chunks = await s.answer(llm, "你们用什么语言？")
+    assert await drain(chunks) == "我们用 Go。那我们回到刚才的问题：你怎么保证消息不丢？"

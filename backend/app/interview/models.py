@@ -82,6 +82,21 @@ class AnswerType(StrEnum):
     candidate_question = "candidate_question"
 
 
+class Routing(BaseModel):
+    """Fast, small judgement that decides where the conversation goes next.
+
+    Kept tiny on purpose: it sits on the critical path between the candidate
+    finishing and the interviewer starting to speak.
+    """
+
+    answer_type: AnswerType
+    needs_follow_up: bool = Field(
+        description="True if the answer is vague, generic, lacks the candidate's own actions, numbers or "
+        "trade-offs, or opens a thread worth digging into"
+    )
+    probe_angle: str = Field(description="If needs_follow_up: the single follow-up angle in under 20 words. Else empty")
+
+
 class Scores(BaseModel):
     relevance: int = Field(ge=1, le=5)
     depth: int = Field(ge=1, le=5)
@@ -90,15 +105,14 @@ class Scores(BaseModel):
     structure: int = Field(ge=1, le=5, description="Logical flow, e.g. STAR for behavioral")
 
 
-class Evaluation(BaseModel):
-    answer_type: AnswerType
+class Assessment(BaseModel):
+    """Detailed scoring for the review. Computed off the critical path."""
+
     scores: Scores
     strengths: list[str]
     gaps: list[str] = Field(description="What is missing, wrong, or unconvincing")
     vague_claims: list[str] = Field(description="Claims stated without support that a real interviewer would press on")
-    should_probe: bool = Field(description="True if a follow-up on the same topic would reveal more signal")
-    probe_angle: str = Field(description="If should_probe: the single most revealing follow-up angle. Else empty")
-    topic_exhausted: bool = Field(description="True if this topic has yielded enough signal")
+    better_answer_hint: str = Field(description="One or two sentences: what a strong answer would have included")
 
 
 # ---------------------------------------------------------------------------

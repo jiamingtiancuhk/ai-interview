@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, type InterviewConfig, type InterviewerRole, type Language, type Persona } from '../api'
+import { api, type Health, type InterviewConfig, type InterviewerRole, type Language, type Persona } from '../api'
 import { PERSONA_LABEL, ROLE_LABEL } from '../labels'
 import { navigate } from '../router'
 
@@ -88,10 +88,21 @@ export default function Setup() {
   const [cfg, setCfg] = useState<InterviewConfig>(DEFAULTS)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [llm, setLlm] = useState<{ ok: boolean; model: string; model_ready: boolean } | null>(null)
+  const [health, setHealth] = useState<Health | null>(null)
+  const llm = health?.llm
 
   useEffect(() => {
-    api.health().then((h) => setLlm(h.llm)).catch(() => setLlm({ ok: false, model: '?', model_ready: false }))
+    let timer: ReturnType<typeof setTimeout>
+    const poll = () =>
+      api
+        .health()
+        .then((h) => {
+          setHealth(h)
+          if (h.asr.state === 'loading' || !h.llm.model_ready) timer = setTimeout(poll, 3000)
+        })
+        .catch(() => (timer = setTimeout(poll, 3000)))
+    poll()
+    return () => clearTimeout(timer)
   }, [])
 
   const set = <K extends keyof InterviewConfig>(k: K, v: InterviewConfig[K]) => setCfg((c) => ({ ...c, [k]: v }))
@@ -118,6 +129,11 @@ export default function Setup() {
         {llm && !llm.model_ready && (
           <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
             {llm.ok ? `模型 ${llm.model} 还没下载完，面试暂时无法开始。` : '连不上 Ollama，请确认 Ollama 已经打开。'}
+          </p>
+        )}
+        {health && health.asr.state !== 'ready' && (
+          <p className="rounded-md bg-zinc-100 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
+            {health.asr.state === 'loading' ? '语音识别模型加载中…现在开始的话可以先用文字回答。' : '语音识别不可用，只能用文字回答。'}
           </p>
         )}
       </header>

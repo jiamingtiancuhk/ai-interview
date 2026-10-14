@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, WebSocket, WebSocketDisc
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import config
+from . import asr, config
 from .documents import extract_text
 from .interview import planner
 from .interview.models import InterviewConfig
@@ -22,12 +22,35 @@ llm = OllamaLLM()
 store = Store()
 live: dict[str, InterviewSession] = {}
 locks: dict[str, asyncio.Lock] = {}
+assessing: dict[str, asyncio.Task] = {}
+
+
+def assess_in_background(s: InterviewSession) -> None:
+    """Score the latest answers while the candidate is busy answering the next question."""
+
+    async def run():
+        if await s.assess_pending(llm):
+            store.save(s)
+
+    task = asyncio.create_task(run())
+    assessing[s.id] = task
+    task.add_done_callback(lambda t: assessing.pop(s.id, None) if assessing.get(s.id) is t else None)
+
+
+def preempt_assessment(s: InterviewSession) -> None:
+    """The live conversation has priority over background scoring: Ollama
+    serves one request at a time, so cancel it (unscored turns are retried)."""
+    task = assessing.pop(s.id, None)
+    if task and not task.done():
+        task.cancel()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info("LLM=%s @ %s, DB=%s", config.LLM_MODEL, config.OLLAMA_URL, config.DB_PATH)
+    log.info("LLM=%s @ %s, ASR=%s, DB=%s", config.LLM_MODEL, config.OLLAMA_URL, config.ASR_MODEL, config.DB_PATH)
+    warm = asyncio.create_task(asr.warmup())
     yield
+    warm.cancel()
     await llm.aclose()
 
 
@@ -47,7 +70,7 @@ def get_session(session_id: str) -> InterviewSession:
 # ---------------------------------------------------------------------------
 @app.get("/api/health")
 async def health():
-    return {"llm": await llm.health()}
+    return {"llm": await llm.health(), "asr": asr.status}
 
 
 @app.post("/api/documents/parse")
@@ -91,6 +114,9 @@ async def get_interview(session_id: str):
     }
     # Assessments stay hidden until the interview is over, like a real one.
     if s.state.finished:
+        if s.assessment_pending and s.id not in assessing:
+            assess_in_background(s)
+        data["assessing"] = s.assessment_pending
         data["plan"] = s.plan.model_dump()
         data["profile"] = s.profile.model_dump() if s.profile else None
         data["turns"] = [t.model_dump() for t in s.turns]
@@ -100,7 +126,9 @@ async def get_interview(session_id: str):
 # ---------------------------------------------------------------------------
 # Live interview over WebSocket
 #   client -> {"type": "start"} | {"type": "answer", "text": str} | {"type": "end"}
-#   server -> state | history | thinking | interviewer_delta | interviewer_done | finished | error
+#             binary frame: one speech segment, 16 kHz mono float32 PCM
+#   server -> state | history | thinking | interviewer_delta | interviewer_done
+#             | transcript_segment | finished | error
 # ---------------------------------------------------------------------------
 async def stream_reply(ws: WebSocket, s: InterviewSession, chunks) -> None:
     text = []
@@ -112,6 +140,7 @@ async def stream_reply(ws: WebSocket, s: InterviewSession, chunks) -> None:
     await ws.send_json({"type": "state", **s.snapshot()})
     if s.state.finished:
         await ws.send_json({"type": "finished"})
+    assess_in_background(s)
 
 
 @app.websocket("/api/interviews/{session_id}/ws")
@@ -127,7 +156,14 @@ async def interview_ws(ws: WebSocket, session_id: str):
 
     try:
         while True:
-            msg = await ws.receive_json()
+            frame = await ws.receive()
+            if frame["type"] == "websocket.disconnect":
+                raise WebSocketDisconnect(frame.get("code", 1000))
+            if frame.get("bytes") is not None:
+                text, latency = await asr.transcribe_pcm(frame["bytes"], s.cfg.language)
+                await ws.send_json({"type": "transcript_segment", "text": text, "latency_s": round(latency, 2)})
+                continue
+            msg = json.loads(frame["text"])
             kind = msg.get("type")
             async with lock:
                 try:
@@ -153,6 +189,7 @@ async def handle(ws: WebSocket, s: InterviewSession, kind: str, msg: dict) -> No
         if not text or s.state.finished:
             return
         await ws.send_json({"type": "thinking"})
+        preempt_assessment(s)
         _, chunks = await s.answer(llm, text)
         await stream_reply(ws, s, chunks)
     elif kind == "end":

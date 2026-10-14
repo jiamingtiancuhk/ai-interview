@@ -1,13 +1,20 @@
 """Turn policy: decides what the interviewer does next.
 
 Deliberately plain code rather than another LLM call. The LLM judges *what*
-the answer contained (Evaluation); this module decides *where the interview
+the answer contained (Routing); this module decides *where the interview
 goes*, so pacing and stage transitions are predictable and unit-testable.
 """
 
 from dataclasses import dataclass
 
-from .models import Action, AnswerType, Evaluation, InterviewPlan, InterviewState, StageKind
+from .models import Action, AnswerType, InterviewPlan, InterviewState, Routing, StageKind
+
+# Follow-ups allowed on one topic before moving on. The self-introduction
+# is a warm-up: one follow-up at most, then into the real content.
+FOLLOW_UP_CAP = {
+    StageKind.intro: 1,
+    StageKind.behavioral: 2,
+}
 
 
 @dataclass(frozen=True)
@@ -34,14 +41,14 @@ def _advance_stage(plan: InterviewPlan, state: InterviewState, elapsed_s: float)
 def decide(
     plan: InterviewPlan,
     state: InterviewState,
-    evaluation: Evaluation,
+    routing: Routing,
     elapsed_s: float,
     total_budget_s: float,
     max_follow_ups: int,
 ) -> Decision:
     stage = plan.stages[state.stage_index]
     in_qa = stage.kind == StageKind.candidate_questions
-    kind = evaluation.answer_type
+    kind = routing.answer_type
 
     # Questions from the candidate are always answered; the clock does not
     # cut someone off mid-question.
@@ -67,16 +74,9 @@ def decide(
     if elapsed_s - state.stage_started_s >= stage.minutes * 60:
         return _advance_stage(plan, state, elapsed_s)
 
-    can_probe = state.follow_ups < max_follow_ups
-    if kind == AnswerType.off_topic and can_probe:
-        return Decision(Action.follow_up, state.model_copy(update={"follow_ups": state.follow_ups + 1}))
-
-    if (
-        kind == AnswerType.answer
-        and evaluation.should_probe
-        and not evaluation.topic_exhausted
-        and can_probe
-    ):
+    cap = min(max_follow_ups, FOLLOW_UP_CAP.get(stage.kind, max_follow_ups))
+    wants_probe = kind == AnswerType.off_topic or (kind == AnswerType.answer and routing.needs_follow_up)
+    if wants_probe and state.follow_ups < cap:
         return Decision(Action.follow_up, state.model_copy(update={"follow_ups": state.follow_ups + 1}))
 
     return _advance_topic(plan, state, elapsed_s)

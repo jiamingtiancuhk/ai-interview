@@ -1,30 +1,37 @@
 from collections.abc import AsyncIterator
 
-from app.interview.models import CandidateProfile, Evaluation, InterviewPlan, Scores
+from app.interview.models import Assessment, CandidateProfile, InterviewPlan, Routing, Scores
 
 
-def evaluation(**overrides) -> Evaluation:
-    base = dict(
-        answer_type="answer",
-        scores=Scores(relevance=3, depth=3, evidence=3, clarity=3, structure=3),
-        strengths=[], gaps=[], vague_claims=[],
-        should_probe=False, probe_angle="", topic_exhausted=True,
+def routing(**overrides) -> Routing:
+    return Routing(**{"answer_type": "answer", "needs_follow_up": False, "probe_angle": "", **overrides})
+
+
+def assessment() -> Assessment:
+    return Assessment(
+        scores=Scores(relevance=3, depth=2, evidence=2, clarity=4, structure=3),
+        strengths=["clear"], gaps=["no numbers"], vague_claims=[], better_answer_hint="add metrics",
     )
-    return Evaluation(**{**base, **overrides})
 
 
 class FakeLLM:
-    """Scripted LLM: structured() pops queued objects, stream() echoes the directive."""
+    """Scripted LLM. structured() pops queued routings; stream() replays `replies`
+    (or the directive's first words) chunk by chunk."""
 
-    def __init__(self, evaluations: list[Evaluation] | None = None, plan: InterviewPlan | None = None):
-        self.evaluations = list(evaluations or [])
+    def __init__(self, routings: list[Routing] | None = None, replies: list[list[str]] | None = None,
+                 plan: InterviewPlan | None = None):
+        self.routings = list(routings or [])
+        self.replies = list(replies or [])
         self.plan = plan or InterviewPlan(stages=[])
         self.calls: list[str] = []
+        self.stream_closed = 0
 
     async def structured(self, messages, schema, temperature=0.2):
         self.calls.append(schema.__name__)
-        if schema is Evaluation:
-            return self.evaluations.pop(0) if self.evaluations else evaluation()
+        if schema is Routing:
+            return self.routings.pop(0) if self.routings else routing()
+        if schema is Assessment:
+            return assessment()
         if schema is InterviewPlan:
             return self.plan
         if schema is CandidateProfile:
@@ -32,6 +39,13 @@ class FakeLLM:
         raise AssertionError(schema)
 
     async def stream(self, messages, temperature=0.7) -> AsyncIterator[str]:
-        directive = messages[-1]["content"]
-        for word in directive.split(" ")[:6]:
-            yield word + " "
+        if self.replies:
+            chunks = self.replies.pop(0)
+        else:
+            directive = messages[-1]["content"].split("DIRECTIVE: ")[-1]
+            chunks = [w + " " for w in directive.split(" ")[:6]] + ["?"]
+        try:
+            for c in chunks:
+                yield c
+        finally:
+            self.stream_closed += 1

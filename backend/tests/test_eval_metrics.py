@@ -69,3 +69,12 @@ def test_unfaithful_turns_excluded_from_label_metrics_only():
     assert m["simulator_fidelity"] == 0.5
     assert m["clarify_handled"] == 1.0  # unfaithful turn ignored
     assert m["one_question_rate"] == 1.0 and m["turns"] == 2  # but still counted here
+
+
+def test_threshold_sweep():
+    from evals.metrics import threshold_sweep
+
+    turns = [dict(behavior="vague", specificity=x) for x in (1, 2, 3)] + [dict(behavior="solid", specificity=x) for x in (3, 4, 5, 5)]
+    rows = {r["threshold"]: r for r in threshold_sweep(turns)}
+    assert rows[2] == {"threshold": 2, "vague": round(2 / 3, 3), "solid": 0.0, "gap": round(2 / 3, 3)}
+    assert rows[3]["vague"] == 1.0 and rows[3]["solid"] == 0.25

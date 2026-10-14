@@ -52,7 +52,12 @@ async def run_interview(
     clock.speak(opening, cfg.language)
     behaviors = candidate.schedule(candidate.PERSONAS[persona_name], args.max_turns, args.seed)
 
+    qa_questions = 0
     for i, behavior in enumerate(behaviors):
+        # In the Q&A stage only two behaviors make sense: ask one question, then none.
+        if s.stage.kind == "candidate_questions":
+            behavior = candidate.Behavior.candidate_question if qa_questions == 0 else candidate.Behavior.no_more_questions
+            qa_questions += behavior == candidate.Behavior.candidate_question
         transcript = [(m.role, m.content) for m in s.messages]
         text, faithful = await candidate.answer(cand, cfg, transcript, behavior)
         clock.speak(text, cfg.language)
@@ -83,6 +88,7 @@ async def run_interview(
             "scenario": scenario, "persona": persona_name, "turn": i,
             "behavior": behavior.value, "expected_type": candidate.EXPECTED_TYPE[behavior], "faithful": faithful,
             "routed_type": record.routing.answer_type.value, "needs_follow_up": record.routing.needs_follow_up,
+            "specificity": getattr(record.routing, "specificity", None),
             "probe_angle": record.routing.probe_angle, "action": record.action.value,
             "stage_kind": stage.kind.value,
             "probe_eligible": eligible, "question": record.question, "answer": text, "reply": reply,
@@ -128,6 +134,10 @@ def to_markdown(s: dict) -> str:
     lines += [f"| {k} | {v} |" for k, v in rows]
     lines += ["", "Routing accuracy by behavior:", ""]
     lines += [f"- {b}: {v}" for b, v in s["routing_accuracy_by_behavior"].items()]
+    if s.get("threshold_sweep"):
+        lines += ["", "Follow-up threshold sweep (follow up when specificity <= t):", "",
+                  "| t | vague followed up | solid followed up | gap |", "|---|---|---|---|"]
+        lines += [f"| {r['threshold']} | {r['vague']} | {r['solid']} | {r['gap']} |" for r in s["threshold_sweep"]]
     return "\n".join(lines) + "\n"
 
 

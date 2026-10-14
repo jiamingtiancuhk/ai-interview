@@ -220,20 +220,18 @@ class InterviewSession:
         finally:
             await stream.aclose()
             self._add("interviewer", joiner.join(said).strip())
+            if action in _ENDS_WITH_QUESTION and said and said[-1].endswith(("?", "？")):
+                self.state = self.state.model_copy(update={"open_question": said[-1]})
 
     def _return_to_question(self, action: Action, said: list[str]) -> str | None:
         """After answering a candidate's question mid-interview, make sure the
         interviewer's own open question is not lost."""
         if not self.guardrails or action != Action.answer_candidate or self.stage.kind == StageKind.candidate_questions:
             return None
-        if said and said[-1].endswith(("?", "？")):
-            return None
-        last_q = next((m.content for m in reversed(self.messages) if m.role == "interviewer"), "")
-        sentences = [x for x in re.split(r"(?<=[。！？!?])\s*", last_q) if x.endswith(("?", "？"))]
-        if not sentences:
+        if said and said[-1].endswith(("?", "？")) or not self.state.open_question:
             return None
         lead = "那我们回到刚才的问题：" if self.cfg.language == "zh" else "Back to my question: "
-        return lead + sentences[-1]
+        return lead + self.state.open_question
 
     # -- public API ---------------------------------------------------------
     def start_planning(self, llm: LLM) -> None:
@@ -268,16 +266,18 @@ class InterviewSession:
         self.started_at = self.clock()
         line = planner.opening_line(self.cfg)
         self._add("interviewer", line)
+        last = re.split(r"(?<=[。！!.])\s*", line)[-1]
+        self.state = self.state.model_copy(update={"open_question": last})
         yield line
 
     async def route(self, llm: LLM, exchanges: list[tuple[str, str]]) -> tuple[Routing, float]:
-        msgs = prompts.routing_messages(self.cfg, self.stage, self.topic, exchanges)
+        msgs = prompts.routing_messages(self.cfg, self.stage, self.topic, exchanges, self.state.open_question)
         t0 = time.perf_counter()
         try:
             r = await llm.structured(msgs, Routing, temperature=0.0)
         except Exception as e:  # noqa: BLE001 - keep the conversation going
             log.error("Routing failed: %s", e)
-            r = Routing(answer_type=AnswerType.answer, needs_follow_up=False, probe_angle="")
+            r = Routing(answer_type=AnswerType.answer, concrete=True, own_actions=True, numbers=True, reasoning=True, missing="")
         return r, time.perf_counter() - t0
 
     async def answer(self, llm: LLM, text: str) -> tuple[TurnRecord, AsyncIterator[str]]:

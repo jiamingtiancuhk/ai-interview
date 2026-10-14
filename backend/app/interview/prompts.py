@@ -98,25 +98,37 @@ def _thread(exchanges: list[tuple[str, str]]) -> str:
     return "\n".join(f"Interviewer: {q}\nCandidate: {a}" for q, a in exchanges)
 
 
-def routing_messages(cfg: InterviewConfig, stage: Stage, topic: Topic, exchanges: list[tuple[str, str]]) -> list[dict]:
+def routing_messages(
+    cfg: InterviewConfig, stage: Stage, topic: Topic, exchanges: list[tuple[str, str]], open_question: str = ""
+) -> list[dict]:
     """Fast path: classify the LAST answer and decide whether to dig deeper."""
+    focus = (
+        f"\n\nTHE INTERVIEWER'S QUESTION THE CANDIDATE IS REPLYING TO: {open_question}\n"
+        "(The interviewer's last message may first answer a question from the candidate and then repeat this "
+        "question. Judge the candidate's last reply against THIS question.)"
+        if open_question
+        else ""
+    )
     return [
         {
             "role": "system",
             "content": (
                 f"You help an interviewer for a {cfg.difficulty}-level '{cfg.job_title}' role decide the next move. "
                 f"Current part of the interview: {STAGE_DESC[stage.kind]}. Topic: {topic.title}.\n"
-                "Classify ONLY the candidate's last reply to the interviewer's last question:\n"
-                "- answer: they attempted to answer the question (even briefly or poorly)\n"
-                "- clarification_request: they ask what the question means or for more detail about it\n"
+                "Classify ONLY the candidate's last reply to the interviewer's question:\n"
+                "- answer: they attempted to answer it (even briefly or poorly). Also use 'answer' when, asked whether "
+                "they have questions, they say they have none\n"
+                "- clarification_request: they ask what the interviewer's question means or for more detail about it\n"
                 "- dont_know: they say they don't know or have no such experience\n"
-                "- candidate_question: they ask the interviewer about the role, team, company or process\n"
+                "- candidate_question: the reply itself ASKS the interviewer something about the role, team, company "
+                "or process\n"
                 "- off_topic: they talk about something unrelated to the question\n"
-                "needs_follow_up: true when a real interviewer would dig deeper on THIS topic. "
-                f"Write probe_angle in {LANG_NAME[cfg.language]}. Speech-to-text errors are possible; ignore typos."
+                "Then answer the four yes/no checks about the reply's content. Each is true only if the reply itself "
+                "clearly contains it; for anything other than an answer, set them all to false.\n"
+                f"Write `missing` in {LANG_NAME[cfg.language]}. Speech-to-text errors are possible; ignore typos."
             ),
         },
-        {"role": "user", "content": _thread(exchanges)},
+        {"role": "user", "content": _thread(exchanges) + focus},
     ]
 
 

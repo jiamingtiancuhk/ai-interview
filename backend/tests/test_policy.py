@@ -22,7 +22,8 @@ BUDGET = 30 * 60
 
 
 def ev(kind=AnswerType.answer, probe=False) -> Routing:
-    return Routing(answer_type=kind, needs_follow_up=probe, probe_angle="why?" if probe else "")
+    c = not probe
+    return Routing(answer_type=kind, missing="why?" if probe else "", concrete=c, own_actions=c, numbers=c, reasoning=c)
 
 
 def run(state, evaluation, elapsed=60.0, max_fu=2):
@@ -100,3 +101,37 @@ def test_out_of_time_in_qa_wraps_up():
 def test_no_more_questions_wraps_up():
     d = run(InterviewState(stage_index=2), ev(AnswerType.answer))
     assert d.action == Action.wrap_up and d.state.finished
+
+
+def test_misrouted_answers_cannot_loop_on_candidate_questions():
+    s = InterviewState(stage_index=1)
+    d1 = run(s, ev(AnswerType.candidate_question))
+    d2 = run(d1.state, ev(AnswerType.candidate_question))
+    assert (d1.action, d2.action) == (Action.answer_candidate, Action.answer_candidate)
+    d3 = run(d2.state, ev(AnswerType.candidate_question))
+    assert d3.action != Action.answer_candidate  # third in a row is treated as an answer
+    assert d3.state.candidate_question_streak == 0
+
+
+def test_qa_stage_wraps_up_after_enough_questions():
+    s = InterviewState(stage_index=2)
+    for _ in range(3):
+        d = run(s, ev(AnswerType.candidate_question))
+        assert d.action == Action.answer_candidate
+        s = d.state
+    assert run(s, ev(AnswerType.candidate_question)).action == Action.wrap_up
+
+
+def test_follow_up_threshold_applies_to_specificity():
+    from app.interview.models import FOLLOW_UP_AT_OR_BELOW
+
+    checks = ["concrete", "own_actions", "numbers", "reasoning"]
+
+    def with_n(n):
+        return Routing(answer_type="answer", missing="", **{c: i < n for i, c in enumerate(checks)})
+
+    assert with_n(FOLLOW_UP_AT_OR_BELOW).needs_follow_up
+    assert not with_n(FOLLOW_UP_AT_OR_BELOW + 1).needs_follow_up
+    assert with_n(3).specificity == 3
+    props = Routing.model_json_schema()["properties"]
+    assert "needs_follow_up" not in props and "specificity" not in props  # code decides, not the LLM

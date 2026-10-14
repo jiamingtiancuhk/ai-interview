@@ -77,7 +77,24 @@ def turn_metrics(all_turns: list[dict]) -> dict:
         "first_sentence_p50": _pct([t["first_sentence_s"] for t in all_turns if t["first_sentence_s"] is not None], 0.5),
         "first_sentence_p95": _pct([t["first_sentence_s"] for t in all_turns if t["first_sentence_s"] is not None], 0.95),
         "behaviors": dict(Counter(t["behavior"] for t in all_turns)),
+        "threshold_sweep": threshold_sweep(turns),
     }
+
+
+def threshold_sweep(turns: list[dict]) -> list[dict]:
+    """Probe rates on vague vs solid answers for every specificity threshold,
+    to choose FOLLOW_UP_AT_OR_BELOW from data rather than by feel."""
+    graded = [t for t in turns if t.get("specificity") is not None and t["behavior"] in ("vague", "solid")]
+    vague = [t["specificity"] for t in graded if t["behavior"] == "vague"]
+    solid = [t["specificity"] for t in graded if t["behavior"] == "solid"]
+    if not vague or not solid:
+        return []
+    rows = []
+    for th in range(1, 5):
+        v = _rate(sum(x <= th for x in vague), len(vague))
+        so = _rate(sum(x <= th for x in solid), len(solid))
+        rows.append({"threshold": th, "vague": v, "solid": so, "gap": round(v - so, 3)})
+    return rows
 
 
 def interview_metrics(interviews: list[dict]) -> dict:

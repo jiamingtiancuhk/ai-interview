@@ -3,8 +3,10 @@ from collections.abc import AsyncIterator
 from app.interview.models import Assessment, CandidateProfile, Improvement, InterviewPlan, Report, Routing, Scores, StageFeedback
 
 
-def routing(**overrides) -> Routing:
-    return Routing(**{"answer_type": "answer", "needs_follow_up": False, "probe_angle": "", **overrides})
+def routing(needs_follow_up: bool = False, probe_angle: str = "", **overrides) -> Routing:
+    checks = not needs_follow_up
+    base = {"answer_type": "answer", "missing": probe_angle, "concrete": checks, "own_actions": checks, "numbers": checks, "reasoning": checks}
+    return Routing(**{**base, **overrides})
 
 
 def assessment() -> Assessment:

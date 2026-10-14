@@ -184,3 +184,35 @@ def test_tidy_report_merges_stage_entries_and_dedupes_advice():
     t = _tidy_report(r, [StageKind.intro, StageKind.resume_deep_dive])
     assert [(s.kind, s.score, s.comment) for s in t.stages] == [("intro", 3, "b"), ("resume_deep_dive", 2, "a")]
     assert len(t.improvements) == 1
+
+
+async def test_return_bridge_never_nests_and_routing_sees_open_question():
+    llm = FakeLLM(
+        routings=[routing(answer_type="candidate_question"), routing(answer_type="candidate_question")],
+        replies=[["你好。", "你怎么保证消息不丢？"], ["我们用 Go。"], ["我们在上海。"]],
+    )
+    s = await new_session(llm)
+    await drain(s._speak(llm, Action.open))
+    assert s.state.open_question == "你怎么保证消息不丢？"
+    for q in ["你们用什么语言？", "你们在哪个城市？"]:
+        _, chunks = await s.answer(llm, q)
+        said = await drain(chunks)
+        assert said.count("回到刚才的问题") == 1 and said.endswith("你怎么保证消息不丢？")
+    assert s.state.open_question == "你怎么保证消息不丢？"  # answering the candidate does not replace it
+
+
+async def test_open_question_set_by_templated_opening():
+    s = await new_session(FakeLLM(), language="en")
+    await drain(s.open(FakeLLM()))
+    assert s.state.open_question.startswith("Could you start by briefly introducing yourself")
+
+
+def test_field_guide_exposes_descriptions_ranges_and_nesting():
+    from app.interview.models import Assessment, Report
+    from app.llm import field_guide, with_field_guide
+
+    g = field_guide(Assessment)
+    assert "- relevance (int 1-5)" in g and "  - evidence (int 1-5): Concrete examples" in g
+    assert "strengths (list of str, at most 3 items)" in field_guide(Report)
+    msgs = with_field_guide([{"role": "system", "content": "S"}, {"role": "user", "content": "U"}], Assessment)
+    assert [m["role"] for m in msgs] == ["system", "system", "user"] and "better_answer_hint" in msgs[1]["content"]

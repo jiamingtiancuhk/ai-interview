@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class Language(StrEnum):
@@ -82,19 +82,46 @@ class AnswerType(StrEnum):
     candidate_question = "candidate_question"
 
 
+# Answers meeting this many specificity checks or fewer get a follow-up.
+# Tuned with the eval harness: the LLM answers yes/no checks, code decides.
+FOLLOW_UP_AT_OR_BELOW = 2
+
+
 class Routing(BaseModel):
     """Fast, small judgement that decides where the conversation goes next.
 
     Kept tiny on purpose: it sits on the critical path between the candidate
     finishing and the interviewer starting to speak.
+
+    Specificity is not asked for as a 1-5 score: the eval harness showed an
+    8B model cannot calibrate one (vague answers got 4, strong ones 3,
+    depending on field order). Four yes/no checks are reliable, and code
+    adds them up.
     """
 
     answer_type: AnswerType
-    needs_follow_up: bool = Field(
-        description="True if the answer is vague, generic, lacks the candidate's own actions, numbers or "
-        "trade-offs, or opens a thread worth digging into"
+    concrete: bool = Field(description="Names specific mechanisms, technologies, situations or examples (not generic statements)")
+    own_actions: bool = Field(description="Makes clear what the candidate PERSONALLY did or decided (not just 'we')")
+    numbers: bool = Field(description="Gives numbers, metrics or measurable results")
+    reasoning: bool = Field(description="Explains why: trade-offs, alternatives considered, or lessons learned")
+    missing: str = Field(
+        max_length=80,
+        description="The single most important thing the answer lacks, a few words. Empty if nothing important",
     )
-    probe_angle: str = Field(description="If needs_follow_up: the single follow-up angle in under 20 words. Else empty")
+
+    @computed_field
+    @property
+    def specificity(self) -> int:
+        return sum((self.concrete, self.own_actions, self.numbers, self.reasoning))
+
+    @computed_field
+    @property
+    def needs_follow_up(self) -> bool:
+        return self.specificity <= FOLLOW_UP_AT_OR_BELOW
+
+    @property
+    def probe_angle(self) -> str:
+        return self.missing
 
 
 class Scores(BaseModel):
@@ -173,3 +200,8 @@ class InterviewState(BaseModel):
     follow_ups: int = 0
     stage_started_s: float = 0.0
     finished: bool = False
+    # The interviewer's own question currently awaiting an answer (not
+    # replies to the candidate's questions); used to route and to return to it.
+    open_question: str = ""
+    # Consecutive turns spent answering the candidate's questions.
+    candidate_question_streak: int = 0

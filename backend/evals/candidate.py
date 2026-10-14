@@ -23,6 +23,8 @@ class Behavior(StrEnum):
     clarify = "clarify"
     dont_know = "dont_know"
     candidate_question = "candidate_question"
+    # Only in the Q&A stage: the candidate has nothing (more) to ask.
+    no_more_questions = "no_more_questions"
 
 
 # What the interviewer's routing should classify each behavior as.
@@ -33,6 +35,7 @@ EXPECTED_TYPE = {
     Behavior.clarify: "clarification_request",
     Behavior.dont_know: "dont_know",
     Behavior.candidate_question: "candidate_question",
+    Behavior.no_more_questions: "answer",
 }
 
 
@@ -69,18 +72,19 @@ _INSTRUCTIONS = {
         "include concrete numbers, a trade-off you considered and why. Structured but spoken."
     ),
     Behavior.vague: (
-        "Give a VAGUE, weak answer: 1-2 short sentences of generic buzzwords, say 'we' instead of 'I', "
-        "no numbers, no specifics, no trade-offs. Sound like you are avoiding details."
+        "Give a VAGUE, weak answer TO THIS QUESTION: 1-2 short sentences of generic statements about the topic, "
+        "say 'we' instead of 'I', no numbers, no specifics, no trade-offs. Sound like you are avoiding details."
     ),
     Behavior.off_topic: (
-        "Go OFF-TOPIC: do not answer the question at all; talk about something unrelated to it "
-        "(e.g. a different project, your hobbies or the company's office). 2-3 sentences."
+        "Go OFF-TOPIC: do not answer the question at all; instead talk about something unrelated to it "
+        "(e.g. an unrelated hobby or an unrelated side project). 2-3 sentences. Do NOT ask any question."
     ),
     Behavior.clarify: (
         "You do NOT understand the question. Ask the interviewer to explain or rephrase it. "
         "One sentence, a question, and do not attempt any answer."
     ),
     Behavior.dont_know: "Admit honestly that you do not know or have no experience with this. 1-2 sentences, no attempt to answer.",
+    Behavior.no_more_questions: "Say you have no further questions and thank the interviewer. One or two sentences, no question.",
     Behavior.candidate_question: (
         "Do NOT answer. Instead ask the interviewer ONE question about the team, the role, the tech stack "
         "or the hiring process. One sentence."
@@ -96,14 +100,6 @@ _EXAMPLES = {
         "zh": "我想先问一下，这个团队现在主要在做哪些项目？",
         "en": "Can I ask what the team is mainly working on right now?",
     },
-    Behavior.dont_know: {
-        "zh": "这个我确实不太清楚，之前没有接触过。",
-        "en": "Honestly, I don't know. I haven't worked with that before.",
-    },
-    Behavior.vague: {
-        "zh": "这个我们当时主要是做了一些优化，整体效果还是挺好的。",
-        "en": "We basically optimized things and it worked out pretty well overall.",
-    },
 }
 
 _LANG = {"zh": "Simplified Chinese, natural spoken style", "en": "English, natural spoken style"}
@@ -111,10 +107,11 @@ _LANG = {"zh": "Simplified Chinese, natural spoken style", "en": "English, natur
 _DEFINITIONS = {
     Behavior.solid: "a specific, substantive attempt to answer the interviewer's question",
     Behavior.vague: "an attempt to answer the question that is generic and lacks specifics, numbers or personal contribution",
-    Behavior.off_topic: "talks about something unrelated and does not address the question",
+    Behavior.off_topic: "talks about something unrelated, does not address the question, and asks no question",
     Behavior.clarify: "asks the interviewer to explain or rephrase THEIR question, without answering it",
     Behavior.dont_know: "says they do not know or lack experience, without really answering",
     Behavior.candidate_question: "asks the interviewer about the team, role, company or process instead of answering",
+    Behavior.no_more_questions: "says they have no (further) questions, without asking anything",
 }
 
 
@@ -132,7 +129,8 @@ async def _generate(llm: LLM, cfg: InterviewConfig, transcript: list[tuple[str, 
             "role": "user",
             "content": (
                 f"{history}\n\nINSTRUCTION FOR THIS REPLY: {_INSTRUCTIONS[behavior]}"
-                + (f"\nExample of the style (do not copy it): {ex}" if (ex := _EXAMPLES.get(behavior, {}).get(cfg.language)) else "")
+                + (f"\nExample of the style (use your own words, adapted to the question): {ex}"
+                   if (ex := _EXAMPLES.get(behavior, {}).get(cfg.language)) else "")
                 + "\n\nYour reply:"
             ),
         },

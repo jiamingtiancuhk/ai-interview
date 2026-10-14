@@ -11,6 +11,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncIterator
+from enum import Enum
 from typing import Protocol, TypeVar
 
 import httpx
@@ -27,6 +28,42 @@ _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 class LLMError(RuntimeError):
     pass
+
+
+def field_guide(schema: type[BaseModel], indent: str = "") -> str:
+    """Describe a model's fields in plain text for the prompt.
+
+    Ollama enforces `format` as a grammar but never shows the schema to the
+    model, so field descriptions (rubrics, units, what goes where) would be
+    invisible without this. Found via the eval harness: the model filled
+    `missing` with the literal word "missing" and ignored scoring rubrics.
+    """
+    lines = []
+    for name, f in schema.model_fields.items():
+        ann = f.annotation
+        inner = getattr(ann, "__args__", (ann,))[0] if getattr(ann, "__origin__", None) is list else ann
+        if isinstance(inner, type) and issubclass(inner, Enum):
+            kind = "one of " + ", ".join(m.value for m in inner)
+        elif isinstance(inner, type) and issubclass(inner, BaseModel):
+            kind = "list of objects" if inner is not ann else "object"
+        else:
+            kind = ("list of " if inner is not ann else "") + getattr(inner, "__name__", str(inner))
+        bounds = {k: getattr(m, k) for m in f.metadata for k in ("ge", "le", "max_length", "min_length") if hasattr(m, k)}
+        if "ge" in bounds and "le" in bounds:
+            kind += f" {bounds['ge']}-{bounds['le']}"
+        if "max_length" in bounds:
+            kind += f", at most {bounds['max_length']}" + (" items" if inner is not ann else " characters")
+        desc = f": {f.description}" if f.description else ""
+        lines.append(f"{indent}- {name} ({kind}){desc}")
+        if isinstance(inner, type) and issubclass(inner, BaseModel):
+            lines.append(field_guide(inner, indent + "  "))
+    return "\n".join(lines)
+
+
+def with_field_guide(messages: list[dict], schema: type[BaseModel]) -> list[dict]:
+    guide = {"role": "system", "content": "Reply with a JSON object with these fields:\n" + field_guide(schema)}
+    # Right after the main system prompt, before the content to judge.
+    return messages[:1] + [guide] + messages[1:]
 
 
 class LLM(Protocol):
@@ -51,7 +88,7 @@ class OllamaLLM:
         }
 
     async def structured(self, messages: list[dict], schema: type[T], temperature: float = 0.2) -> T:
-        payload = self._payload(messages, temperature, stream=False)
+        payload = self._payload(with_field_guide(messages, schema), temperature, stream=False)
         payload["format"] = schema.model_json_schema()
         last_err: Exception | None = None
         for attempt in range(2):

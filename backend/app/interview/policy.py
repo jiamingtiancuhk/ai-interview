@@ -17,6 +17,13 @@ FOLLOW_UP_CAP = {
 }
 
 
+# Candidate questions answered in a row before the interviewer moves on: mid
+# interview it treats the next one as an answer (protects against loops from
+# misrouted answers); in the Q&A stage it wraps up.
+MAX_CANDIDATE_QUESTIONS_IN_ROW = 2
+MAX_QA_QUESTIONS = 3
+
+
 @dataclass(frozen=True)
 class Decision:
     action: Action
@@ -46,14 +53,30 @@ def decide(
     total_budget_s: float,
     max_follow_ups: int,
 ) -> Decision:
+    d = _decide(plan, state, routing, elapsed_s, total_budget_s, max_follow_ups)
+    streak = state.candidate_question_streak + 1 if d.action == Action.answer_candidate else 0
+    return Decision(d.action, d.state.model_copy(update={"candidate_question_streak": streak}))
+
+
+def _decide(
+    plan: InterviewPlan,
+    state: InterviewState,
+    routing: Routing,
+    elapsed_s: float,
+    total_budget_s: float,
+    max_follow_ups: int,
+) -> Decision:
     stage = plan.stages[state.stage_index]
     in_qa = stage.kind == StageKind.candidate_questions
     kind = routing.answer_type
 
-    # Questions from the candidate are always answered; the clock does not
-    # cut someone off mid-question.
+    # Questions from the candidate are answered, even when time is up, within limits.
     if kind == AnswerType.candidate_question:
-        return Decision(Action.answer_candidate, state)
+        if in_qa and state.candidate_question_streak >= MAX_QA_QUESTIONS:
+            return Decision(Action.wrap_up, state.model_copy(update={"finished": True}))
+        if in_qa or state.candidate_question_streak < MAX_CANDIDATE_QUESTIONS_IN_ROW:
+            return Decision(Action.answer_candidate, state)
+        kind = AnswerType.answer  # likely a misrouted answer: carry on with the interview
 
     if elapsed_s >= total_budget_s:
         # Out of time: skip straight to the candidate's Q&A if we have not

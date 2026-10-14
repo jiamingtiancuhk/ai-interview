@@ -1,154 +1,98 @@
-# 🎯 Local AI Interview Copilot
+# AI Interview
 
-A fully **local, offline** AI-powered interview practice system built for **NVIDIA Jetson Orin NX**. It uses on-device speech recognition, a local LLM, and text-to-speech to simulate a realistic interview experience — no cloud services required.
+A realistic mock interviewer that runs **entirely on your own machine**. It reads your resume and the job description, plans a staged interview around them, talks with you by voice, digs into vague answers like a real interviewer, and writes a hiring-committee style debrief at the end.
 
----
+> 本地运行的 AI 模拟面试官：读简历和 JD 生成面试计划，分阶段语音面试，回答含糊会被连续追问，结束后给出录用建议和逐题复盘。全部在本机运行，简历和录音不会离开你的电脑。
 
-## Features
+Started as a course project (CUHK IEMS 5709, an edge-computing interview copilot on NVIDIA Jetson; see the first commit) and rebuilt for Apple Silicon with a focus on how real interviews actually flow.
 
-- 🎤 **Voice interaction** — speak your answers, hear the AI's questions
-- 🤖 **Intelligent follow-up questions** — the LLM adapts based on your answer quality
-- 📊 **Real-time scoring** — each answer is scored on Completeness, Depth, Clarity, and Structure (0–10)
-- 💡 **Instant feedback** — actionable suggestions after every answer
-- 📁 **Session history** — review past interviews with score trend charts
-- 🗂️ **JD / Resume upload** — personalise questions from a PDF, DOCX, or pasted text
-- 🔒 **100% local** — all inference runs on-device via Ollama, Whisper, and Kokoro TTS
+## What makes it feel like a real interview
 
----
+| | |
+|---|---|
+| **Planned, not random** | Resume + JD → candidate profile (projects, claims worth verifying, gaps vs. the JD) → a plan with stages: intro → project deep-dive → technical → behavioral → your questions. Each stage has a time budget that depends on who is interviewing you. |
+| **Follow-ups** | Vague answer, no numbers, no personal contribution? The interviewer drills down on the same topic (capped per stage) before moving on. |
+| **Natural turn-taking** | Hands-free voice: speech detection in the browser, ~2.5 s of silence submits the answer. Ask "what do you mean?" and it rephrases; ask about the team and it answers, then returns to its open question. |
+| **Interviewers differ** | Tech lead / hiring manager / HR, and friendly / neutral / stress-interview styles. |
+| **No live scores** | Like a real interview, you get no feedback mid-way. Afterwards: per-answer scores with quotes of your vague claims, a "better answer" hint, per-stage feedback, a hire/no-hire recommendation and three concrete things to practice. |
 
-## System Architecture
+## Architecture
 
+```mermaid
+flowchart LR
+  subgraph Browser
+    MIC[Mic] --> VAD[Silero VAD<br/>onnxruntime-web]
+    UI[React UI] --> TTS[OS speech synthesis<br/>sentence by sentence]
+  end
+  VAD -- "PCM segments (WebSocket)" --> ASR
+  UI <-- "text + events (WebSocket)" --> S
+  subgraph Backend [FastAPI]
+    ASR[mlx-whisper<br/>large-v3-turbo] --> S[Interview session]
+    S -->|"1. route (tiny JSON)"| LLM
+    S -->|"2. policy (pure code)"| S
+    S -->|"3. speak (stream)"| LLM
+    S -.->|"background: assess, report"| LLM
+    S --> DB[(SQLite)]
+  end
+  LLM[Ollama<br/>qwen3:8b]
 ```
-Browser ──► FastAPI (port 3000)
-               ├── ASR  ──► faster-whisper  (port 5092)
-               ├── LLM  ──► Ollama          (port 11434)
-               └── TTS  ──► Kokoro TTS      (port 8880)
-```
 
-All services communicate over `localhost` using Docker `network_mode: host`.
+### Design decisions
 
----
+- **The LLM judges, code decides.** Each answer gets a small structured *routing* judgement (answer / clarification / don't know / candidate question / off-topic, plus whether to probe). A pure, unit-tested policy turns that into the next move: follow up, clarify, next topic, next stage, answer the candidate, wrap up. Pacing and stage transitions stay predictable; the LLM never "forgets" the agenda.
+- **Critical path vs. background work.** Only the tiny routing call sits between you finishing and the interviewer speaking. Detailed scoring runs in the background while you answer the next question, and is cancelled if you answer first (Ollama serves one request at a time; the conversation wins).
+- **Instant start.** The interview opens with a templated greeting; profiling and planning run during your self-introduction, which takes longer than planning does.
+- **Guardrails on a small model, in code.** Structured outputs are constrained by JSON Schema (Ollama grammar). The spoken reply is streamed sentence by sentence; sentences that just echo the previous question are dropped, and generation is cut after the first question so it never asks three at once. Report structure is normalised in code (one entry per stage, no duplicate advice).
+- **Context-biased speech recognition.** Whisper is prompted with technical terms from your resume, the JD and the current question, so mixed Chinese/English answers come out as "Kafka" and "P99" instead of "CAFCA" and "T99".
+- **Resumable.** Every turn is persisted; refresh or restart and the interview continues where it stopped, clock included.
 
-## Hardware Requirements
+### Measured on an M5 MacBook (24 GB)
 
-| Component | Minimum |
-|-----------|---------|
-| Platform  | NVIDIA Jetson Orin NX (or equivalent Jetson with JetPack 6) |
-| RAM       | 16 GB unified memory |
-| Storage   | 20 GB free (for Docker images + model weights) |
-| GPU       | CUDA-capable (Jetson integrated GPU) |
+| | |
+|---|---|
+| Start interview | 0.06 s (plan ready ~35 s later, in the background) |
+| You stop talking → interviewer's first sentence | ~2.5–4 s (routing call ~1.5–2.8 s) |
+| Speech recognition, 13 s answer | 0.65–1.1 s |
+| VAD model init in browser | ~90 ms |
 
----
+## Run it
 
-## Services
-
-| Service | Image | Port |
-|---------|-------|------|
-| Ollama (LLM) | `dustynv/ollama:r36.4.0-cu128-24.04` | 11434 |
-| ASR (Whisper) | `faster-whisper:fastapi` | 5092 |
-| TTS (Kokoro) | `dustynv/kokoro-tts:fastapi-r36.4.0-cu128-24.04` | 8880 |
-| Web App | Built from `Dockerfile` | 3000 |
-
-### Supported LLM Models
-
-| Model | Tag | Notes |
-|-------|-----|-------|
-| Qwen2.5 3B | `qwen2.5:3b` | Default, fast on Jetson |
-| Gemma2 2B | `gemma2:2b` | Google, compact |
-
-Models are pulled automatically on first startup.
-
----
-
-## Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose installed
-- NVIDIA Container Runtime configured (`nvidia-docker2`)
-- The `faster-whisper:fastapi` image built locally (see Lab 3)
-
-### 1. Clone the repository
+Requirements: Apple Silicon Mac, [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node 20+.
 
 ```bash
-git clone https://github.com/JJMonsterLin/AI-interview-Copilot.git
-cd AI-interview-Copilot
+ollama pull qwen3:8b
+cd backend && uv run python scripts/download_asr_model.py   # Whisper weights (from ModelScope, checksum-verified)
+cd .. && ./scripts/start.sh                                   # http://localhost:8000
 ```
 
-### 2. (First run only) Build the faster-whisper ASR image
+Use Chrome or Safari and allow the microphone. Headphones are recommended so the interviewer's voice isn't picked up by the mic. Text mode works without any speech models.
 
-Follow the instructions in Lab 3 to build `faster-whisper:fastapi`, or run:
+For better voices, install a Premium/Enhanced voice in *System Settings → Accessibility → Spoken Content*; it is picked up automatically.
+
+### Development
 
 ```bash
-# Example — adjust path to your Lab3 Dockerfile
-docker build -t faster-whisper:fastapi ./asr
+cd backend && uv run uvicorn app.main:app --reload --port 8000
+cd frontend && npm install && npm run dev                     # http://localhost:5173
+cd backend && uv run pytest
 ```
 
-### 3. Start all services
+Configuration (environment variables): `LLM_MODEL` (default `qwen3:8b`), `OLLAMA_URL`, `ASR_MODEL` (local folder or Hugging Face repo id), `MAX_FOLLOW_UPS`, `DB_PATH`.
 
-```bash
-docker compose up --build
-```
-
-> **Note:** The first run downloads Qwen2.5 3B and Gemma2 2B (~5 GB total). This may take 10–20 minutes depending on your network speed. The app will start automatically once models are ready.
-
-### 4. Open the web interface
-
-Navigate to [http://localhost:3000](http://localhost:3000) in your browser.
-
----
-
-## Usage
-
-1. **Setup tab** — choose job title, interview type (Technical / Behavioural / Comprehensive), difficulty, and optionally upload a job description or resume.
-2. **Start Interview** — the AI generates an opening question and reads it aloud.
-3. **Record Answer** — click the microphone button to record your answer, then click Stop.
-4. The system transcribes your speech, scores your answer, and asks a follow-up question.
-5. **End Interview** — click ⏹ End to finish. The session is saved to History.
-6. **History tab** — review all past sessions with per-turn scores and a trend chart.
-
----
-
-## Project Structure
+## Project layout
 
 ```
-Project/
-├── app/
-│   ├── main.py          # FastAPI backend
-│   └── static/
-│       └── index.html   # Single-page frontend
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-└── README.md
+backend/app/
+  interview/
+    models.py     data model + LLM output schemas
+    planner.py    resume/JD -> profile -> staged plan
+    policy.py     next-move decision (pure code, unit tested)
+    prompts.py    all prompts (routing, assessment, speaker, report)
+    session.py    turn pipeline, guardrails, background assessment, report
+  asr.py          mlx-whisper with vocabulary biasing
+  llm.py          Ollama client (structured + streaming)
+  main.py         REST + WebSocket API
+frontend/src/
+  pages/          Setup, Interview, Review, History
+  voice/          VAD microphone hook, streaming speaker
 ```
-
----
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ASR_URL` | `http://localhost:5092` | Faster-Whisper service URL |
-| `LLM_URL` | `http://localhost:11434` | Ollama service URL |
-| `TTS_URL` | `http://localhost:8880` | Kokoro TTS service URL |
-| `DB_PATH` | `/data/interview.db` | SQLite database path |
-| `MAX_TURNS` | `6` | Max turns per interview session |
-| `APP_PORT` | `3000` | Web app listening port |
-
----
-
-## Tech Stack
-
-- **Backend**: Python 3.11, FastAPI, httpx, SQLite
-- **Frontend**: Vanilla JS, Chart.js 4
-- **ASR**: OpenAI Whisper (faster-whisper) via OpenAI-compatible API
-- **LLM**: Ollama with Qwen2.5 / Gemma2
-- **TTS**: Kokoro TTS (Jetson-optimised)
-- **Deployment**: Docker Compose on NVIDIA Jetson Orin NX
-
----
-
-## Course
-
-IEMS 5709 — Edge Computing, CUHK, 2025 Spring R2

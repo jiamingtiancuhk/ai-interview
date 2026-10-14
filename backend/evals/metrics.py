@@ -8,6 +8,12 @@ from collections import Counter, defaultdict
 from app.interview.session import _SENTENCE_END, _is_echo, _norm
 
 QUESTION_ACTIONS = {"follow_up", "clarify", "next_topic", "next_stage"}
+# The interviewer speaking its own reasoning or instructions aloud.
+_LEAK = re.compile(
+    r"DIRECTIVE|^\s*(首先[，,]|First, (I|let|we)|Okay, so (I|the)|好的，用户|用户(指定|要求))"
+    r"|Let me (think|analy[sz]e|understand|figure)|理解(角色|场景|DIRECTIVE)|我的角色",
+    re.IGNORECASE,
+)
 _QMARK = re.compile(r"[?？]")
 
 
@@ -72,6 +78,7 @@ def turn_metrics(all_turns: list[dict]) -> dict:
         # Label-independent metrics use every turn.
         "echo_rate": _rate(sum(_is_echo(first_sentence(t["reply"]), [_norm(x) for x in t["recent"]]) for t in all_turns), len(all_turns)),
         "empty_reply_rate": _rate(sum(not t["reply"].strip() for t in all_turns), len(all_turns)),
+        "reasoning_leak_rate": _rate(sum(bool(_LEAK.search(t["reply"])) for t in all_turns), len(all_turns)),
         "route_latency_p50": _pct([t["route_s"] for t in all_turns], 0.5),
         "route_latency_p95": _pct([t["route_s"] for t in all_turns], 0.95),
         "first_sentence_p50": _pct([t["first_sentence_s"] for t in all_turns if t["first_sentence_s"] is not None], 0.5),

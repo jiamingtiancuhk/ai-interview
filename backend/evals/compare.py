@@ -21,6 +21,7 @@ METRICS = [
     ("candidate_question_returns_to_topic", "...then back to the open question", True),
     ("one_question_rate", "Exactly one question per turn", True),
     ("echo_rate", "Replies opening with an echo", False),
+    ("reasoning_leak_rate", "Replies leaking the model's reasoning", False),
     ("finished_rate", "Interviews finished", True),
     ("stages_within_budget", "Stages within time budget", True),
     ("route_latency_p50", "Routing latency p50 (s)", False),

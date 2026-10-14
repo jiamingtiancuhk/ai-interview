@@ -78,3 +78,11 @@ def test_threshold_sweep():
     rows = {r["threshold"]: r for r in threshold_sweep(turns)}
     assert rows[2] == {"threshold": 2, "vague": round(2 / 3, 3), "solid": 0.0, "gap": round(2 / 3, 3)}
     assert rows[3]["vague"] == 1.0 and rows[3]["solid"] == 0.25
+
+
+def test_reasoning_leak_detected():
+    leaks = ["首先，理解角色：我是技术负责人", "First, I need to...", "根据 DIRECTIVE，我需要", "Let me think about the role."]
+    fine = ["好的。你在项目里具体负责什么？", "First things first: what did you build?", "Let me rephrase that: what did you own?",
+            "Okay, let's dive into your projects."]
+    m = turn_metrics([t("solid", "answer", reply=r) for r in leaks + fine])
+    assert m["reasoning_leak_rate"] == round(4 / 8, 3)

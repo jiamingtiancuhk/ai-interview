@@ -46,12 +46,25 @@ flowchart LR
 - **Context-biased speech recognition.** Whisper is prompted with technical terms from your resume, the JD and the current question, so mixed Chinese/English answers come out as "Kafka" and "P99" instead of "CAFCA" and "T99".
 - **Resumable.** Every turn is persisted; refresh or restart and the interview continues where it stopped, clock included.
 
+### Evaluated, not eyeballed
+
+An [eval harness](backend/evals/README.md) runs the real interview engine against simulated candidates whose behaviour each turn is scripted (solid, vague, off-topic, asks for clarification, doesn't know, asks the interviewer), so every decision has a ground-truth label. 20 interviews per run; [full results](backend/evals/RESULTS.md).
+
+| | baseline | after eval-driven fixes |
+|---|---|---|
+| Routing accuracy | 82% | **96%** |
+| Follows up vague answers but not strong ones (discrimination) | −1% | **96%** |
+| Candidate's questions answered | 73% | **100%** |
+| Interviews that reach the end within 14 turns | 15% | **95%** |
+
+The harness also drove the model choice (qwen3:4b is 40% faster but speaks its chain of thought in 83% of replies) and an ablation showing the reply guardrails prevent multi-question turns in 30% of cases.
+
 ### Measured on an M5 MacBook (24 GB)
 
 | | |
 |---|---|
 | Start interview | 0.06 s (plan ready ~35 s later, in the background) |
-| You stop talking → interviewer's first sentence | ~2.5–4 s (routing call ~1.5–2.8 s) |
+| You stop talking → interviewer's first sentence | 3.9 s p50, 5.5 s p95 (eval, 189 turns) |
 | Speech recognition, 13 s answer | 0.65–1.1 s |
 | VAD model init in browser | ~90 ms |
 
@@ -75,6 +88,7 @@ For better voices, install a Premium/Enhanced voice in *System Settings → Acce
 cd backend && uv run uvicorn app.main:app --reload --port 8000
 cd frontend && npm install && npm run dev                     # http://localhost:5173
 cd backend && uv run pytest
+cd backend && uv run python -m evals.run --quick --name smoke   # interviewer evals (see backend/evals)
 ```
 
 Configuration (environment variables): `LLM_MODEL` (default `qwen3:8b`), `OLLAMA_URL`, `ASR_MODEL` (local folder or Hugging Face repo id), `MAX_FOLLOW_UPS`, `DB_PATH`.
@@ -92,6 +106,7 @@ backend/app/
   asr.py          mlx-whisper with vocabulary biasing
   llm.py          Ollama client (structured + streaming)
   main.py         REST + WebSocket API
+backend/evals/    simulated candidates, metrics, comparison and error analysis
 frontend/src/
   pages/          Setup, Interview, Review, History
   voice/          VAD microphone hook, streaming speaker

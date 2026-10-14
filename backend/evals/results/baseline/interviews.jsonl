@@ -1,0 +1,1 @@
+{"scenario": "backend_zh", "persona": "strong", "finished": false, "reached_qa": false, "turns": 14, "elapsed_s": 767.9, "duration_s": 900, "stages": [{"kind": "intro", "spent_s": 156.3, "budget_s": 120}, {"kind": "resume_deep_dive", "spent_s": 252.9, "budget_s": 300}]}

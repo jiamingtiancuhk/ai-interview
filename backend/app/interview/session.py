@@ -14,7 +14,7 @@ import re
 import time
 import uuid
 from difflib import SequenceMatcher
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel
@@ -114,6 +114,10 @@ class InterviewSession:
     messages: list[Message] = field(default_factory=list)
     turns: list[TurnRecord] = field(default_factory=list)
     started_at: float = field(default_factory=time.time)
+    # Injectable for evals, which run interviews on a simulated clock.
+    clock: Callable[[], float] = field(default=time.time, repr=False)
+    # Code-side guardrails on the spoken reply; switchable for ablation evals.
+    guardrails: bool = True
     # Wall-clock offset so a resumed session keeps its elapsed time.
     paused_elapsed_s: float = 0.0
     report: Report | None = None
@@ -122,7 +126,7 @@ class InterviewSession:
 
     # -- helpers ------------------------------------------------------------
     def elapsed_s(self) -> float:
-        return self.paused_elapsed_s + (time.time() - self.started_at)
+        return self.paused_elapsed_s + (self.clock() - self.started_at)
 
     @property
     def stage(self):
@@ -184,7 +188,7 @@ class InterviewSession:
             sentence = _SPEAKER_PREFIX.sub("", sentence).strip() if not said else sentence.strip()
             if not sentence:
                 return None
-            if _is_echo(sentence, recent):
+            if self.guardrails and _is_echo(sentence, recent):
                 dropped.append(sentence)
                 return None
             said.append(sentence)
@@ -193,7 +197,7 @@ class InterviewSession:
         def done() -> bool:
             last = said[-1] if said else ""
             asked = action in _ENDS_WITH_QUESTION and last.endswith(("?", "？"))
-            return asked or len(said) >= _MAX_SENTENCES
+            return self.guardrails and (asked or len(said) >= _MAX_SENTENCES)
 
         try:
             async for piece in stream:
@@ -220,7 +224,7 @@ class InterviewSession:
     def _return_to_question(self, action: Action, said: list[str]) -> str | None:
         """After answering a candidate's question mid-interview, make sure the
         interviewer's own open question is not lost."""
-        if action != Action.answer_candidate or self.stage.kind == StageKind.candidate_questions:
+        if not self.guardrails or action != Action.answer_candidate or self.stage.kind == StageKind.candidate_questions:
             return None
         if said and said[-1].endswith(("?", "？")):
             return None
@@ -261,7 +265,7 @@ class InterviewSession:
             await asyncio.shield(self._planning)
 
     async def open(self, llm: LLM) -> AsyncIterator[str]:
-        self.started_at = time.time()
+        self.started_at = self.clock()
         line = planner.opening_line(self.cfg)
         self._add("interviewer", line)
         yield line

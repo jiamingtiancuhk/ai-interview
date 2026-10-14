@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from .. import config
 from ..llm import LLM
-from . import policy, prompts
+from . import planner, policy, prompts
 from .models import (
     Action,
     AnswerType,
@@ -31,7 +31,9 @@ from .models import (
     InterviewPlan,
     InterviewState,
     Message,
+    Report,
     Routing,
+    StageFeedback,
     StageKind,
 )
 
@@ -59,6 +61,29 @@ def _is_echo(sentence: str, recent: list[str]) -> bool:
     if len(s) < 6:
         return False
     return any(s in r or SequenceMatcher(None, s, r).ratio() > 0.85 for r in recent)
+
+
+def _tidy_report(report: Report, kinds: list[StageKind]) -> Report:
+    """Enforce one entry per stage (in interview order) and no duplicate advice.
+
+    Small models sometimes write one stage entry per answer; merge those by
+    averaging the score and keeping the first comment.
+    """
+    merged: dict[StageKind, list] = {}
+    for st in report.stages:
+        merged.setdefault(st.kind, []).append(st)
+    stages = [
+        StageFeedback(kind=k, score=round(sum(x.score for x in merged[k]) / len(merged[k])), comment=merged[k][0].comment)
+        for k in kinds
+        if k in merged
+    ]
+    seen: set[str] = set()
+    improvements = []
+    for im in report.improvements:
+        if _norm(im.how_to_practice) not in seen:
+            seen.add(_norm(im.how_to_practice))
+            improvements.append(im)
+    return report.model_copy(update={"stages": stages, "improvements": improvements})
 
 
 class TurnRecord(BaseModel):
@@ -91,7 +116,9 @@ class InterviewSession:
     started_at: float = field(default_factory=time.time)
     # Wall-clock offset so a resumed session keeps its elapsed time.
     paused_elapsed_s: float = 0.0
+    report: Report | None = None
     _assess_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    _planning: asyncio.Task | None = field(default=None, repr=False)
 
     # -- helpers ------------------------------------------------------------
     def elapsed_s(self) -> float:
@@ -205,9 +232,39 @@ class InterviewSession:
         return lead + sentences[-1]
 
     # -- public API ---------------------------------------------------------
-    def open(self, llm: LLM) -> AsyncIterator[str]:
+    def start_planning(self, llm: LLM) -> None:
+        """Read the resume/JD and plan the interview in the background.
+
+        The interview starts immediately on a skeleton plan; the warm-up
+        (self-introduction) needs no personalised plan, and takes longer than
+        planning does, so the candidate never waits for it.
+        """
+
+        async def run() -> None:
+            t0 = time.perf_counter()
+            try:
+                profile = await planner.build_profile(llm, self.cfg)
+            except Exception as e:  # noqa: BLE001 - fall back to a generic plan
+                log.warning("Profile extraction failed: %s", e)
+                profile = None
+            plan = await planner.build_plan(llm, self.cfg, profile)
+            self.profile = profile
+            # Stages already reached keep their topics; only the future changes.
+            for i in range(self.state.stage_index + 1, len(plan.stages)):
+                self.plan.stages[i] = plan.stages[i]
+            log.info("plan ready in %.1fs", time.perf_counter() - t0)
+
+        self._planning = asyncio.create_task(run())
+
+    async def wait_for_plan(self) -> None:
+        if self._planning is not None:
+            await asyncio.shield(self._planning)
+
+    async def open(self, llm: LLM) -> AsyncIterator[str]:
         self.started_at = time.time()
-        return self._speak(llm, Action.open)
+        line = planner.opening_line(self.cfg)
+        self._add("interviewer", line)
+        yield line
 
     async def route(self, llm: LLM, exchanges: list[tuple[str, str]]) -> tuple[Routing, float]:
         msgs = prompts.routing_messages(self.cfg, self.stage, self.topic, exchanges)
@@ -223,6 +280,7 @@ class InterviewSession:
         """Record the candidate's answer, decide, and return the reply stream."""
         if self.state.finished:
             raise RuntimeError("Interview already finished")
+        await self.wait_for_plan()  # usually long done; the policy needs real topics
         question = self._last_question()
         exchanges = self._topic_exchanges(text)
         routing, latency = await self.route(llm, exchanges)
@@ -281,6 +339,7 @@ class InterviewSession:
             "turns": "[" + ",".join(t.model_dump_json() for t in self.turns) + "]",
             "elapsed_s": self.elapsed_s(),
             "finished": int(self.state.finished),
+            "report": self.report.model_dump_json() if self.report else None,
         }
 
     @classmethod
@@ -295,11 +354,42 @@ class InterviewSession:
             turns=[TurnRecord.model_validate(t) for t in json.loads(row["turns"])],
         )
         s.paused_elapsed_s = row["elapsed_s"]
+        if row.get("report"):
+            s.report = Report.model_validate_json(row["report"])
         return s
 
     @property
     def assessment_pending(self) -> bool:
         return any(t.scorable and t.assessment is None for t in self.turns)
+
+    @property
+    def review_pending(self) -> bool:
+        """Something is still being computed for the review page."""
+        has_answers = any(t.scorable for t in self.turns)
+        return self.assessment_pending or (self.state.finished and has_answers and self.report is None)
+
+    async def build_report(self, llm: LLM) -> Report | None:
+        """Debrief over all assessed answers; run once the interview is over."""
+        scored = [t for t in self.turns if t.assessment is not None]
+        if not scored:
+            return None
+        by_stage: dict[StageKind, list[TurnRecord]] = {}
+        for t in scored:
+            by_stage.setdefault(self.plan.stages[t.stage_index].kind, []).append(t)
+        sections = []
+        for kind, turns in by_stage.items():
+            lines = [f"## Stage: {kind}"]
+            for t in turns:
+                a = t.assessment
+                lines.append(
+                    f"Q: {t.question}\nA: {t.answer[:800]}\n"
+                    f"scores={a.scores.model_dump()} gaps={a.gaps} vague={a.vague_claims}"
+                )
+            sections.append("\n".join(lines))
+        msgs = prompts.report_messages(self.cfg, "\n\n".join(sections), [str(k) for k in by_stage])
+        report = await llm.structured(msgs, Report, temperature=0.3)
+        self.report = _tidy_report(report, list(by_stage))
+        return self.report
 
     def snapshot(self) -> dict:
         """Client-facing progress (no scores: the interview should feel real)."""

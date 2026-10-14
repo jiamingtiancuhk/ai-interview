@@ -198,7 +198,7 @@ export default function Setup() {
         onClick={start}
         className="w-full rounded-lg bg-zinc-900 py-3 font-medium text-white transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40 dark:bg-white dark:text-zinc-900 dark:hover:bg-zinc-200"
       >
-        {busy ? '面试官正在看你的简历、准备问题…' : '开始面试'}
+        {busy ? '正在进入面试…' : '开始面试'}
       </button>
     </div>
   )

@@ -220,3 +220,26 @@ def speaker_messages(
     body += "DIRECTIVE: " + _directive(action, stage, topic, last_q, probe_angle, cfg.duration_min)
     body += "\n\nInterviewer's next words:"
     return [{"role": "system", "content": _speaker_system(cfg, profile)}, {"role": "user", "content": body}]
+
+
+# ---------------------------------------------------------------------------
+# Final report
+# ---------------------------------------------------------------------------
+def report_messages(cfg: InterviewConfig, turns_digest: str, stage_kinds: list[str]) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                f"You are writing the hiring-committee debrief after a {cfg.duration_min}-minute interview for a "
+                f"{cfg.difficulty}-level '{cfg.job_title}' role. You receive every question, the candidate's answer and "
+                "the per-answer assessment. Be honest and specific, like a calibrated senior interviewer: cite what the "
+                "candidate said, do not invent anything, and do not be generous to vague answers. "
+                f"Give exactly one StageFeedback per stage, in this order: {', '.join(stage_kinds)}. "
+                "Improvements must be distinct and actionable before the next interview "
+                "(e.g. 'prepare a STAR story about X with numbers').\n"
+                "The candidate will read this: address them directly in the second person (你 / you).\n"
+                f"Write all text in {LANG_NAME[cfg.language]}."
+            ),
+        },
+        {"role": "user", "content": turns_digest},
+    ]

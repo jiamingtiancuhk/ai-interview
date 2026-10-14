@@ -1,5 +1,5 @@
 from app.interview import planner
-from app.interview.models import Action, InterviewConfig, StageKind
+from app.interview.models import Action, InterviewConfig, InterviewPlan, Stage, StageKind, Topic
 from app.interview.session import InterviewSession
 from app.store import Store
 
@@ -14,6 +14,27 @@ async def new_session(llm, **cfg) -> InterviewSession:
     c = InterviewConfig(job_title="Backend Engineer", **cfg)
     plan = await planner.build_plan(llm, c, None)
     return InterviewSession(cfg=c, plan=plan, profile=None)
+
+
+async def test_background_plan_replaces_only_future_stages(tmp_path):
+    custom = Topic(title="Kafka", rationale="", opening_question="How did you size partitions?")
+    plan = InterviewPlan(stages=[Stage(kind=StageKind.technical, goal="g", minutes=5, topics=[custom])])
+    llm = FakeLLM(plan=plan)
+    c = InterviewConfig(job_title="Backend Engineer", resume_text="Go, Kafka")
+    s = InterviewSession(cfg=c, plan=planner.skeleton_plan(c), profile=None)
+    intro_before = s.plan.stages[0]
+    said = await drain(s.open(llm))
+    assert "自我介绍" in said and llm.calls == []  # templated, no LLM wait
+    s.start_planning(llm)
+    await s.wait_for_plan()
+    tech = next(st for st in s.plan.stages if st.kind == StageKind.technical)
+    assert tech.topics[0].title == "Kafka"
+    assert s.plan.stages[0] == intro_before and s.profile is not None
+    store = Store(tmp_path / "t.db")
+    store.save(s)  # insert
+    s.plan.stages[1].goal = "changed"
+    store.save(s)  # upsert must persist plan changes
+    assert store.load(s.id).plan.stages[1].goal == "changed"
 
 
 async def test_fallback_plan_matches_role_skeleton():
@@ -73,7 +94,7 @@ async def test_store_roundtrip(tmp_path):
 async def test_reply_is_cut_after_first_question_and_label_stripped():
     llm = FakeLLM(replies=[["面试官：", "你好，我是", "技术负责人。", "先做个自我介绍吧？", "另外你为什么", "离职？"]])
     s = await new_session(llm)
-    said = await drain(s.open(llm))
+    said = await drain(s._speak(llm, Action.open))
     assert said == "你好，我是技术负责人。先做个自我介绍吧？"
     assert s.messages[-1].content == said
     assert llm.stream_closed == 1  # generation aborted, not drained
@@ -89,10 +110,7 @@ async def test_wrap_up_is_not_cut_and_english_keeps_spaces():
 async def test_echoed_question_is_dropped():
     llm = FakeLLM(
         routings=[routing(answer_type="candidate_question")],
-        replies=[
-            ["你好。", "请介绍一下你自己？"],
-            ["你们团队现在主要用什么技术栈？", "我们主要用 Go 和 Kafka。", "还有其他问题吗？"],
-        ],
+        replies=[["你们团队现在主要用什么技术栈？", "我们主要用 Go 和 Kafka。", "还有其他问题吗？"]],
     )
     s = await new_session(llm)
     await drain(s.open(llm))
@@ -127,6 +145,42 @@ async def test_mid_interview_candidate_question_returns_to_open_question():
         replies=[["你好。", "你怎么保证消息不丢？"], ["我们用 Go。"]],
     )
     s = await new_session(llm)
-    await drain(s.open(llm))
+    await drain(s._speak(llm, Action.open))
     _, chunks = await s.answer(llm, "你们用什么语言？")
     assert await drain(chunks) == "我们用 Go。那我们回到刚才的问题：你怎么保证消息不丢？"
+
+
+async def test_report_after_finish_and_persisted(tmp_path):
+    llm = FakeLLM()
+    s = await new_session(llm)
+    await drain(s.open(llm))
+    _, c = await s.answer(llm, "answer")
+    await drain(c)
+    s.state = s.state.model_copy(update={"finished": True})
+    assert s.review_pending
+    await s.assess_pending(llm)
+    assert s.review_pending  # scored, but report still missing
+    await s.build_report(llm)
+    assert not s.review_pending
+    store = Store(tmp_path / "t.db")
+    store.save(s)
+    assert store.load(s.id).report.recommendation == "lean_yes"
+
+
+def test_tidy_report_merges_stage_entries_and_dedupes_advice():
+    from app.interview.models import Improvement, Report, StageFeedback
+    from app.interview.session import _tidy_report
+
+    r = Report(
+        recommendation="lean_no", summary="s",
+        stages=[
+            StageFeedback(kind="resume_deep_dive", score=4, comment="a"),
+            StageFeedback(kind="intro", score=3, comment="b"),
+            StageFeedback(kind="resume_deep_dive", score=1, comment="c"),
+        ],
+        strengths=["x"],
+        improvements=[Improvement(issue="i1", how_to_practice="写 STAR 故事"), Improvement(issue="i2", how_to_practice="写STAR故事。")],
+    )
+    t = _tidy_report(r, [StageKind.intro, StageKind.resume_deep_dive])
+    assert [(s.kind, s.score, s.comment) for s in t.stages] == [("intro", 3, "b"), ("resume_deep_dive", 2, "a")]
+    assert len(t.improvements) == 1

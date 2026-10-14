@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { api, type InterviewDetail, type Scores } from '../api'
-import { ACTION_LABEL, ROLE_LABEL, SCORE_LABEL, STAGE_LABEL, fmtTime } from '../labels'
+import { api, type InterviewDetail, type Report, type Scores } from '../api'
+import { ACTION_LABEL, RECOMMENDATION, ROLE_LABEL, SCORE_LABEL, STAGE_LABEL, fmtTime } from '../labels'
 
 const UNSCORED = ['candidate_question', 'clarification_request']
 
@@ -33,6 +33,46 @@ function List({ title, items, tone }: { title: string; items: string[]; tone: st
         ))}
       </ul>
     </div>
+  )
+}
+
+function ReportCard({ report }: { report: Report }) {
+  const rec = RECOMMENDATION[report.recommendation]
+  return (
+    <section className="space-y-5 rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="font-medium">面试官结论</h2>
+        <span className={`rounded-full px-3 py-1 text-sm font-medium ${rec.tone}`}>{rec.label}</span>
+      </div>
+      <p className="leading-relaxed text-zinc-700 dark:text-zinc-300">{report.summary}</p>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {report.stages.map((st, i) => (
+          <div key={i} className="rounded-lg bg-zinc-50 p-3 dark:bg-zinc-900">
+            <div className="mb-1 flex items-center justify-between text-sm">
+              <span className="font-medium">{STAGE_LABEL[st.kind] ?? st.kind}</span>
+              <span className="font-mono tabular-nums text-zinc-500">{st.score}/5</span>
+            </div>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400">{st.comment}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-5 sm:grid-cols-2">
+        <List title="做得好的" items={report.strengths} tone="text-emerald-600" />
+        <div>
+          <div className="text-xs font-medium text-amber-600">下次面试前要改进的</div>
+          <ol className="ml-4 mt-1 list-decimal space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+            {report.improvements.map((im, i) => (
+              <li key={i}>
+                <div>{im.issue}</div>
+                <div className="text-zinc-500">练习：{im.how_to_practice}</div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </div>
+    </section>
   )
 }
 
@@ -78,9 +118,12 @@ export default function Review({ id }: { id: string }) {
 
       {d.assessing && (
         <p className="rounded-md bg-zinc-100 px-3 py-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-          还有回答正在评分，页面会自动更新…
+          {d.report ? '' : scored.length < d.turns.filter((t) => !UNSCORED.includes(t.routing.answer_type)).length ? '正在给每个回答评分…' : '正在写总体评价…'}
+          页面会自动更新。
         </p>
       )}
+
+      {d.report && <ReportCard report={d.report} />}
 
       {overall && (
         <section className="space-y-2 rounded-xl border border-zinc-200 p-5 dark:border-zinc-800">

@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 
-from app.interview.models import Assessment, CandidateProfile, InterviewPlan, Routing, Scores
+from app.interview.models import Assessment, CandidateProfile, Improvement, InterviewPlan, Report, Routing, Scores, StageFeedback
 
 
 def routing(**overrides) -> Routing:
@@ -32,6 +32,12 @@ class FakeLLM:
             return self.routings.pop(0) if self.routings else routing()
         if schema is Assessment:
             return assessment()
+        if schema is Report:
+            return Report(
+                recommendation="lean_yes", summary="ok",
+                stages=[StageFeedback(kind="intro", score=3, comment="fine")],
+                strengths=["clear"], improvements=[Improvement(issue="no numbers", how_to_practice="add metrics")],
+            )
         if schema is InterviewPlan:
             return self.plan
         if schema is CandidateProfile:

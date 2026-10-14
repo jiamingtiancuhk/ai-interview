@@ -50,6 +50,33 @@ def normalize(plan: InterviewPlan, cfg: InterviewConfig) -> InterviewPlan:
     return InterviewPlan(stages=fixed)
 
 
+def skeleton_plan(cfg: InterviewConfig) -> InterviewPlan:
+    """Stages and budgets with generic questions; available instantly."""
+    return normalize(InterviewPlan(stages=[]), cfg)
+
+
+_ROLE_INTRO = {
+    "zh": {"tech_lead": "团队的技术负责人", "hiring_manager": "这个岗位的业务主管", "hr": "负责招聘的 HR"},
+    "en": {"tech_lead": "the tech lead of the team", "hiring_manager": "the hiring manager for this role", "hr": "from the recruiting team"},
+}
+
+
+def opening_line(cfg: InterviewConfig) -> str:
+    """Templated greeting so the interview starts with zero LLM latency."""
+    role = _ROLE_INTRO[cfg.language][cfg.interviewer_role]
+    if cfg.language == "zh":
+        warm = {"friendly": "你好，欢迎！别紧张，就当是聊聊天。", "neutral": "你好。", "pressure": "你好，我们直接开始。"}[cfg.persona]
+        return (
+            f"{warm}我是{role}，今天这场面试大概{cfg.duration_min}分钟。"
+            f"先请你简单做个自我介绍，重点讲讲和{cfg.job_title}相关的经历？"
+        )
+    warm = {"friendly": "Hi, welcome! Relax, think of this as a conversation.", "neutral": "Hello.", "pressure": "Hello. Let's get straight into it."}[cfg.persona]
+    return (
+        f"{warm} I'm {role}, and this interview will take about {cfg.duration_min} minutes. "
+        f"Could you start by briefly introducing yourself, focusing on what's relevant to the {cfg.job_title} role?"
+    )
+
+
 async def build_plan(llm: LLM, cfg: InterviewConfig, profile: CandidateProfile | None) -> InterviewPlan:
     try:
         raw = await llm.structured(prompts.plan_messages(cfg, profile), InterviewPlan, temperature=0.6)

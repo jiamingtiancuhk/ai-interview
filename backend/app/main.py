@@ -31,6 +31,12 @@ def assess_in_background(s: InterviewSession) -> None:
     async def run():
         if await s.assess_pending(llm):
             store.save(s)
+        if s.state.finished and s.report is None and not s.assessment_pending:
+            try:
+                await s.build_report(llm)
+                store.save(s)
+            except LLMError as e:
+                log.warning("Report failed for %s: %s", s.id, e)
 
     task = asyncio.create_task(run())
     assessing[s.id] = task
@@ -83,12 +89,11 @@ async def parse_document(file: UploadFile):
 
 @app.post("/api/interviews")
 async def create_interview(cfg: InterviewConfig):
-    try:
-        profile = await planner.build_profile(llm, cfg)
-    except LLMError as e:
-        raise HTTPException(502, f"LLM unavailable: {e}") from e
-    plan = await planner.build_plan(llm, cfg, profile)
-    s = InterviewSession(cfg=cfg, plan=plan, profile=profile)
+    health = await llm.health()
+    if not health["model_ready"]:
+        raise HTTPException(503, f"LLM not ready: {health.get('error') or health['model'] + ' not installed'}")
+    s = InterviewSession(cfg=cfg, plan=planner.skeleton_plan(cfg), profile=None)
+    s.start_planning(llm)
     live[s.id] = s
     store.save(s)
     return s.snapshot()
@@ -114,9 +119,10 @@ async def get_interview(session_id: str):
     }
     # Assessments stay hidden until the interview is over, like a real one.
     if s.state.finished:
-        if s.assessment_pending and s.id not in assessing:
+        if s.review_pending and s.id not in assessing:
             assess_in_background(s)
-        data["assessing"] = s.assessment_pending
+        data["assessing"] = s.review_pending
+        data["report"] = s.report.model_dump() if s.report else None
         data["plan"] = s.plan.model_dump()
         data["profile"] = s.profile.model_dump() if s.profile else None
         data["turns"] = [t.model_dump() for t in s.turns]
@@ -196,6 +202,7 @@ async def handle(ws: WebSocket, s: InterviewSession, kind: str, msg: dict) -> No
         s.state = s.state.model_copy(update={"finished": True})
         store.save(s)
         await ws.send_json({"type": "finished"})
+        assess_in_background(s)
 
 
 # ---------------------------------------------------------------------------

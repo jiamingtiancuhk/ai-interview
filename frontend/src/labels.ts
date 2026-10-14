@@ -1,4 +1,4 @@
-import type { InterviewerRole, Persona, StageKind } from './api'
+import type { InterviewerRole, Persona, Recommendation, StageKind } from './api'
 
 export const STAGE_LABEL: Record<StageKind, string> = {
   intro: '自我介绍',
@@ -41,4 +41,13 @@ export function fmtTime(s: number): string {
   const m = Math.floor(s / 60)
   const sec = Math.floor(s % 60)
   return `${m}:${sec.toString().padStart(2, '0')}`
+}
+
+export const RECOMMENDATION: Record<Recommendation, { label: string; tone: string }> = {
+  strong_yes: { label: '强烈推荐录用', tone: 'bg-emerald-600 text-white' },
+  yes: { label: '推荐录用', tone: 'bg-emerald-500 text-white' },
+  lean_yes: { label: '倾向录用', tone: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' },
+  lean_no: { label: '倾向不录用', tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300' },
+  no: { label: '不录用', tone: 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300' },
+  strong_no: { label: '明确不录用', tone: 'bg-red-600 text-white' },
 }

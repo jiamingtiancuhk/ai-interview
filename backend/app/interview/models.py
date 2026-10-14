@@ -115,6 +115,37 @@ class Assessment(BaseModel):
     better_answer_hint: str = Field(description="One or two sentences: what a strong answer would have included")
 
 
+class Recommendation(StrEnum):
+    strong_no = "strong_no"
+    no = "no"
+    lean_no = "lean_no"
+    lean_yes = "lean_yes"
+    yes = "yes"
+    strong_yes = "strong_yes"
+
+
+class StageFeedback(BaseModel):
+    kind: StageKind
+    score: int = Field(ge=1, le=5)
+    comment: str = Field(description="Two sentences, citing what the candidate actually said")
+
+
+class Improvement(BaseModel):
+    issue: str = Field(description="A specific weakness observed in this interview")
+    how_to_practice: str = Field(description="A concrete exercise to fix it before the next interview")
+
+
+class Report(BaseModel):
+    """Hiring-committee style debrief for the whole interview."""
+
+    recommendation: Recommendation
+    summary: str = Field(description="Three sentences: overall impression, biggest strength, biggest risk")
+    stages: list[StageFeedback]
+    # Length limits end up in the JSON schema, which Ollama enforces as a grammar.
+    strengths: list[str] = Field(min_length=1, max_length=3, description="Top strengths, each tied to evidence from the interview")
+    improvements: list[Improvement] = Field(min_length=1, max_length=3, description="Top improvements, most important first, no duplicates")
+
+
 # ---------------------------------------------------------------------------
 # Runtime state
 # ---------------------------------------------------------------------------

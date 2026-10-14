@@ -37,11 +37,11 @@ class Store:
         rec = s.to_record()
         now = time.time()
         self._conn.execute(
-            """INSERT INTO interviews (id, created_at, updated_at, config, profile, plan, state, messages, turns, elapsed_s, finished)
-               VALUES (:id, :now, :now, :config, :profile, :plan, :state, :messages, :turns, :elapsed_s, :finished)
+            """INSERT INTO interviews (id, created_at, updated_at, config, profile, plan, state, messages, turns, elapsed_s, finished, report)
+               VALUES (:id, :now, :now, :config, :profile, :plan, :state, :messages, :turns, :elapsed_s, :finished, :report)
                ON CONFLICT(id) DO UPDATE SET
-                 updated_at=:now, state=:state, messages=:messages, turns=:turns,
-                 elapsed_s=:elapsed_s, finished=:finished""",
+                 updated_at=:now, profile=:profile, plan=:plan, state=:state, messages=:messages, turns=:turns,
+                 elapsed_s=:elapsed_s, finished=:finished, report=:report""",
             {**rec, "now": now},
         )
         self._conn.commit()
@@ -49,14 +49,6 @@ class Store:
     def load(self, session_id: str) -> InterviewSession | None:
         row = self._conn.execute("SELECT * FROM interviews WHERE id=?", (session_id,)).fetchone()
         return InterviewSession.from_record(dict(row)) if row else None
-
-    def save_report(self, session_id: str, report_json: str) -> None:
-        self._conn.execute("UPDATE interviews SET report=? WHERE id=?", (report_json, session_id))
-        self._conn.commit()
-
-    def get_row(self, session_id: str) -> dict | None:
-        row = self._conn.execute("SELECT * FROM interviews WHERE id=?", (session_id,)).fetchone()
-        return dict(row) if row else None
 
     def list(self, limit: int = 50) -> list[dict]:
         rows = self._conn.execute(

@@ -49,6 +49,16 @@ export interface Assessment {
   better_answer_hint: string
 }
 
+export type Recommendation = 'strong_no' | 'no' | 'lean_no' | 'lean_yes' | 'yes' | 'strong_yes'
+
+export interface Report {
+  recommendation: Recommendation
+  summary: string
+  stages: { kind: StageKind; score: number; comment: string }[]
+  strengths: string[]
+  improvements: { issue: string; how_to_practice: string }[]
+}
+
 export interface Turn {
   stage_index: number
   topic_index: number
@@ -65,6 +75,7 @@ export interface InterviewDetail extends Snapshot {
   messages: Message[]
   turns?: Turn[]
   assessing?: boolean
+  report?: Report | null
   plan?: { stages: { kind: StageKind; goal: string; minutes: number; topics: { title: string; rationale: string }[] }[] }
 }
 

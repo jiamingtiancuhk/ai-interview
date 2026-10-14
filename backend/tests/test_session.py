@@ -216,3 +216,23 @@ def test_field_guide_exposes_descriptions_ranges_and_nesting():
     assert "strengths (list of str, at most 3 items)" in field_guide(Report)
     msgs = with_field_guide([{"role": "system", "content": "S"}, {"role": "user", "content": "U"}], Assessment)
     assert [m["role"] for m in msgs] == ["system", "system", "user"] and "better_answer_hint" in msgs[1]["content"]
+
+
+def test_is_candidate_question():
+    from app.interview.session import is_candidate_question
+
+    for q in ["想问一下团队现在的值班制度是怎样的", "你们用什么技术栈？", "团队有多少人", "What does the on-call look like?",
+              "Can I ask about the team size"]:
+        assert is_candidate_question(q), q
+    for a in ["谢谢您的解答，我暂时没有其他问题了。", "没什么问题了，谢谢", "No more questions, thanks!",
+              "I have no further questions.", "我负责下单链路，把同步写改成异步。"]:
+        assert not is_candidate_question(a), a
+
+
+async def test_misrouted_no_more_questions_becomes_answer():
+    llm = FakeLLM(routings=[routing(answer_type="candidate_question")])
+    s = await new_session(llm)
+    await drain(s.open(llm))
+    rec, chunks = await s.answer(llm, "谢谢您的解答，我暂时没有其他问题了。")
+    await drain(chunks)
+    assert rec.routing.answer_type == "answer"

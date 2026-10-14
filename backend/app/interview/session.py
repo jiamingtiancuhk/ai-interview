@@ -42,6 +42,28 @@ log = logging.getLogger(__name__)
 _SENTENCE_END = re.compile(r"[。！？!?；;\n]|\.(?=\s)")
 _SPEAKER_PREFIX = re.compile(r"^\s*[\"“]?\s*(interviewer|面试官)\s*[:：]\s*", re.IGNORECASE)
 _NON_WORD = re.compile(r"[\W_]+")
+# Cues that a reply asks something. Speech transcripts may lack "?", so
+# interrogative words count too.
+_INTERROGATIVE = re.compile(
+    r"[?？]|吗|呢|什么|怎么|怎样|如何|哪|多少|几个|是否|能否|可否|会不会|有没有|是不是|为什么|"
+    r"\b(what|how|why|when|where|who|which|can|could|do|does|is|are|will|would|should)\b",
+    re.IGNORECASE,
+)
+_NO_MORE_QUESTIONS = re.compile(
+    r"(没有|暂时没有|没什么)(其他|别的|更多)?(的)?问题|no (more|other|further) questions|nothing (else )?to ask",
+    re.IGNORECASE,
+)
+
+
+def is_candidate_question(reply: str) -> bool:
+    """Deterministic sanity check for a `candidate_question` routing.
+
+    The eval harness showed the 8B model routing "thanks, I have no more
+    questions" as a question in most Q&A stages, which made the interviewer
+    loop. A reply that says it has no questions, or contains no
+    interrogative cue at all, is not a question.
+    """
+    return not _NO_MORE_QUESTIONS.search(reply) and bool(_INTERROGATIVE.search(reply))
 # Actions whose reply must end at the interviewer's (single) question.
 _ENDS_WITH_QUESTION = {Action.open, Action.follow_up, Action.clarify, Action.next_topic, Action.next_stage}
 _MAX_SENTENCES = 4
@@ -278,6 +300,8 @@ class InterviewSession:
         except Exception as e:  # noqa: BLE001 - keep the conversation going
             log.error("Routing failed: %s", e)
             r = Routing(answer_type=AnswerType.answer, concrete=True, own_actions=True, numbers=True, reasoning=True, missing="")
+        if r.answer_type == AnswerType.candidate_question and not is_candidate_question(exchanges[-1][1]):
+            r = r.model_copy(update={"answer_type": AnswerType.answer})
         return r, time.perf_counter() - t0
 
     async def answer(self, llm: LLM, text: str) -> tuple[TurnRecord, AsyncIterator[str]]:

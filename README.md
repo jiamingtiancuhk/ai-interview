@@ -4,7 +4,7 @@ A realistic mock interviewer that runs **entirely on your own machine**. It read
 
 > 本地运行的 AI 模拟面试官：读简历和 JD 生成面试计划，分阶段语音面试，回答含糊会被连续追问，结束后给出录用建议和逐题复盘。全部在本机运行，简历和录音不会离开你的电脑。
 
-Started as a team course project (CUHK IEMS 5709, an edge-computing interview copilot on NVIDIA Jetson) written together with [@JJMonsterLin](https://github.com/JJMonsterLin); the original is at [JJMonsterLin/AI-interview-Copilot](https://github.com/JJMonsterLin/AI-interview-Copilot) and imported here as the first commit. This repository rebuilds it for Apple Silicon with a focus on how real interviews actually flow.
+By **Jiaming Tian** ([@jiamingtiancuhk](https://github.com/jiamingtiancuhk)). Started as a team course project (CUHK IEMS 5709, an interview copilot on NVIDIA Jetson) and rewritten from scratch for Apple Silicon: the planning, interview engine, voice pipeline, reports and eval harness are all new. The original is kept as the first commit for reference.
 
 ## What makes it feel like a real interview
 
